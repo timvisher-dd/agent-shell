@@ -349,23 +349,20 @@ NAVIGATION controls navigability:
                                                     help-echo ,qualified-id
                                                     read-only t
                                                     front-sticky (read-only))))
-    (when-let ((is-collapsable collapsable)
-               (body-overlay (make-overlay (or label-right-end
-                                               label-left-end) body-end)))
-      (overlay-put body-overlay 'evaporate t)
-      (overlay-put body-overlay 'agent-shell-ui-section 'body)
-      (overlay-put body-overlay 'invisible (not expanded)))
-    ;; Hide trailing whitespace (don't delete) in body.
+    ;; Include the newlines before the body in the invisible region
+    (when collapsable
+      (add-text-properties (or label-right-end label-left-end)
+                           body-end
+                           `(invisible ,(if expanded nil t))))
+    ;; Hide trailing whitespace (don't delete) in body using text properties.
     (when body
       (save-mark-and-excursion
         (goto-char body-end)
         (when (re-search-backward "[^ \t\n]" body-start t)
           (forward-char 1)
           (when (< (point) body-end)
-            (let ((ws-overlay (make-overlay (point) body-end)))
-              (overlay-put ws-overlay 'invisible t)
-              (overlay-put ws-overlay 'evaporate t)
-              (overlay-put ws-overlay 'agent-shell-ui-section 'trailing-whitespace))))))
+            (add-text-properties (point) body-end
+                                 '(invisible t))))))
     (when body
       (unless agent-shell-ui--content-store
         (setq agent-shell-ui--content-store (make-hash-table :test 'equal)))
@@ -432,22 +429,33 @@ NAVIGATION controls navigability:
                             :property 'agent-shell-ui-section :value 'indicator
                             :from (map-elt block :start)
                             :to (map-elt block :end)))
-                (body-overlay (seq-first (overlays-in (map-elt body :start)
-                                                      (map-elt body :end))))
-                (overlay-found (equal (overlay-get body-overlay 'agent-shell-ui-section) 'body)))
-      (when (equal (overlay-get body-overlay 'agent-shell-ui-section) 'body)
-        (let ((indicator-properties (text-properties-at (map-elt indicator :start))))
-          (overlay-put body-overlay 'invisible (not (map-elt state :collapsed)))
-          (delete-region (map-elt indicator :start)
-                         (map-elt indicator :end))
-          (goto-char (map-elt indicator :start))
-          (insert (if (map-elt state :collapsed)
-                      "▼ "
-                    "▶ "))
-          (add-text-properties (map-elt indicator :start)
-                               (map-elt indicator :end)
-                               indicator-properties)
-          (map-put! state :collapsed (not (map-elt state :collapsed))))
+                ;; Find where labels end (either label-right or label-left)
+                (invisible-start (or (map-elt (agent-shell-ui--nearest-range-matching-property
+                                               :property 'agent-shell-ui-section :value 'label-right
+                                               :from (map-elt block :start)
+                                               :to (map-elt block :end))
+                                              :end)
+                                     (map-elt (agent-shell-ui--nearest-range-matching-property
+                                               :property 'agent-shell-ui-section :value 'label-left
+                                               :from (map-elt block :start)
+                                               :to (map-elt block :end))
+                                              :end)))
+                ;; Must be saved before deleting region.
+                (indicator-properties (text-properties-at (map-elt indicator :start))))
+      (let ((new-collapsed-state (not (map-elt state :collapsed))))
+        ;; Toggle invisible text property including newlines before body
+        (put-text-property invisible-start
+                           (map-elt body :end)
+                           'invisible new-collapsed-state)
+        ;; Update indicator
+        (delete-region (map-elt indicator :start)
+                       (map-elt indicator :end))
+        (goto-char (map-elt indicator :start))
+        (insert (if new-collapsed-state "▶ " "▼ "))
+        ;; Update state
+        (add-text-properties (map-elt indicator :start)
+                             (point) indicator-properties)
+        (map-put! state :collapsed new-collapsed-state)
         (put-text-property (map-elt block :start)
                            (map-elt block :end) 'agent-shell-ui-state state)))))
 

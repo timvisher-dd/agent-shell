@@ -301,7 +301,42 @@ With EXISTING-ONLY, only return existing buffers without creating."
   (with-current-buffer (agent-shell-prompt-compose--shell-buffer)
     (goto-char (point-max)))
   (agent-shell-prompt-compose-edit-mode)
-  (agent-shell-prompt-compose--initialize))
+  (agent-shell-prompt-compose--initialize)
+  (goto-char (point-min)))
+
+(defun agent-shell-prompt-compose-previous-interaction ()
+  "Show previous interaction (request / response)."
+  (interactive)
+  (agent-shell-prompt-compose-next-interaction t))
+
+(defun agent-shell-prompt-compose-next-interaction (&optional backwards)
+  "Show next interaction (request / response).
+
+If BACKWARDS is non-nil, go to previous interaction."
+  (interactive)
+  (unless (derived-mode-p 'agent-shell-prompt-compose-view-mode)
+    (error "Not in a compose buffer"))
+  (when (agent-shell-prompt-compose--busy-p)
+    (user-error "Busy... please wait"))
+  (when-let ((shell-buffer (agent-shell-prompt-compose--shell-buffer))
+             (compose-buffer (agent-shell-prompt-compose--buffer))
+             (next (with-current-buffer shell-buffer
+                     (if backwards
+                         (when (save-excursion
+                                 (let ((orig-line (line-number-at-pos)))
+                                   (comint-previous-prompt 1)
+                                   (= orig-line (line-number-at-pos))))
+                           (error "No previous page"))
+                       (when (save-excursion
+                               (let ((orig-line (point)))
+                                 (comint-next-prompt 1)
+                                 (= orig-line (point))))
+                         (error "No next page")))
+                     (shell-maker-next-command-and-response backwards))))
+    (agent-shell-prompt-compose--initialize
+     :prompt (car next) :response (cdr next))
+    (goto-char (point-min))
+    next))
 
 (cl-defun agent-shell-prompt-compose--shell-buffer (&key no-error)
   "Get an `agent-shell' buffer (create one if needed).
@@ -397,6 +432,8 @@ Automatically determines qualifier and bindings based on current major mode."
     (define-key map (kbd "C-c C-c") #'agent-shell-prompt-compose-interrupt)
     (define-key map (kbd "<tab>") #'agent-shell-prompt-compose-next-item)
     (define-key map (kbd "<backtab>") #'agent-shell-prompt-compose-previous-item)
+    (define-key map (kbd "f") #'agent-shell-prompt-compose-next-interaction)
+    (define-key map (kbd "b") #'agent-shell-prompt-compose-previous-interaction)
     (define-key map (kbd "r") #'agent-shell-prompt-compose-reply)
     (define-key map (kbd "q") #'bury-buffer)
     map)
@@ -407,6 +444,7 @@ Automatically determines qualifier and bindings based on current major mode."
 
 \\{agent-shell-prompt-compose-view-mode-map}"
   (cursor-intangible-mode +1)
+  (agent-shell-ui-mode +1)
   (agent-shell-prompt-compose--update-header)
   (setq buffer-read-only t))
 
