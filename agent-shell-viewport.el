@@ -1,4 +1,4 @@
-;;; agent-shell-prompt-compose.el --- Agent shell prompt compose buffer  -*- lexical-binding: t -*-
+;;; agent-shell-viewport.el --- Agent shell viewport interaction  -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2025 Alvaro Ramirez
 
@@ -20,8 +20,9 @@
 
 ;;; Commentary:
 
-;; Prompt compose buffers enable crafting more involved queries and
-;; simplify both response navigation and follow-up queries.
+;; Viewport provides an alternative interaction mode for agent-shell.
+;; It enables crafting queries, navigating conversation history,
+;; and viewing responses in a dedicated buffer.
 ;;
 ;; Support the work https://github.com/sponsors/xenodium
 
@@ -54,15 +55,15 @@
 (declare-function agent-shell-ui-mode "agent-shell")
 
 (defvar agent-shell-header-style)
-(defvar agent-shell-prefer-compose-buffer)
+(defvar agent-shell-prefer-viewport-interaction)
 (defvar agent-shell-preferred-agent-config)
 
-(cl-defun agent-shell-prompt-compose--show-buffer (&key text submit no-focus shell-buffer)
-  "Show a compose buffer for the agent shell.
+(cl-defun agent-shell-viewport--show-buffer (&key text submit no-focus shell-buffer)
+  "Show a viewport compose buffer for the agent shell.
 
-TEXT is inserted into the compose buffer.
+TEXT is inserted into the viewport compose buffer.
 SUBMIT, when non-nil, submits after insertion.
-NO-FOCUS, when non-nil, avoids focusing the compose buffer.
+NO-FOCUS, when non-nil, avoids focusing the viewport compose buffer.
 SHELL-BUFFER, when non-nil, prefer this shell buffer.
 NEW-SHELL, create a new shell (no history).
 
@@ -81,17 +82,17 @@ Returns an alist with insertion details or nil otherwise:
       (pop-to-buffer-same-window shell-buffer)
       (pop-to-buffer-same-window current)))
   (when-let ((shell-buffer (or shell-buffer (agent-shell--shell-buffer)))
-             (compose-buffer (agent-shell-prompt-compose--buffer :shell-buffer shell-buffer))
+             (viewport-buffer (agent-shell-viewport--buffer :shell-buffer shell-buffer))
              (text (or text (agent-shell--relevant-text) "")))
     (let ((insert-start nil)
           (insert-end nil))
-      (agent-shell--display-buffer compose-buffer)
+      (agent-shell--display-buffer viewport-buffer)
       ;; TODO: Do we need to get prompt and partial response,
-      ;; in case compose buffer is created for the first time
-      ;; on an ongoing/busy shell session?
-      (if (agent-shell-prompt-compose--busy-p)
-          (agent-shell-prompt-compose-view-mode)
-        (if (derived-mode-p 'agent-shell-prompt-compose-edit-mode)
+      ;; in case viewport compose buffer is created for the
+      ;; first time on an ongoing/busy shell session?
+      (if (agent-shell-viewport--busy-p)
+          (agent-shell-viewport-view-mode)
+        (if (derived-mode-p 'agent-shell-viewport-edit-mode)
             (unless (string-empty-p text)
               (save-excursion
                 (goto-char (point-max))
@@ -99,73 +100,73 @@ Returns an alist with insertion details or nil otherwise:
                 (unless (string-empty-p text)
                   (insert "\n\n" text))
                 (setq insert-end (point))))
-          (agent-shell-prompt-compose-edit-mode)
+          (agent-shell-viewport-edit-mode)
           ;; Transitioned to edit mode. Start empty.
-          (agent-shell-prompt-compose--initialize)
+          (agent-shell-viewport--initialize)
           (save-excursion
             (goto-char (point-max))
             (setq insert-start (point))
             (unless (string-empty-p text)
               (insert "\n\n" text))
             (setq insert-end (point)))))
-      `((:buffer . ,compose-buffer)
+      `((:buffer . ,viewport-buffer)
         (:start . ,insert-start)
         (:end . ,insert-end)))))
 
-(defun agent-shell-prompt-compose-send ()
-  "Send the composed prompt to the agent shell."
+(defun agent-shell-viewport-compose-send ()
+  "Send the viewport composed prompt to the agent shell."
   (interactive)
-  (if agent-shell-prefer-compose-buffer
-      (agent-shell-prompt-compose-send-and-wait-for-response)
-    (agent-shell-prompt-compose-send-and-kill)))
+  (if agent-shell-prefer-viewport-interaction
+      (agent-shell-viewport-compose-send-and-wait-for-response)
+    (agent-shell-viewport-compose-send-and-kill)))
 
-(defun agent-shell-prompt-compose-send-and-kill ()
-  "Send the composed prompt to the agent shell and kill compose buffer."
+(defun agent-shell-viewport-compose-send-and-kill ()
+  "Send the viewport composed prompt to the agent shell and kill compose buffer."
   (interactive)
   (let ((shell-buffer (agent-shell--shell-buffer))
-        (compose-buffer (current-buffer))
+        (viewport-buffer (current-buffer))
         (prompt (buffer-string)))
     (with-current-buffer shell-buffer
       (agent-shell--insert-to-shell-buffer
        :text prompt
        :submit t))
-    (kill-buffer compose-buffer)
+    (kill-buffer viewport-buffer)
     (pop-to-buffer shell-buffer)))
 
-(defun agent-shell-prompt-compose-send-and-wait-for-response ()
-  "Send the composed prompt to the agent shell."
+(defun agent-shell-viewport-compose-send-and-wait-for-response ()
+  "Send the viewport composed prompt and display response in viewport."
   (interactive)
   (catch 'exit
-    (unless (derived-mode-p 'agent-shell-prompt-compose-edit-mode)
-      (user-error "Not in a shell compose buffer"))
+    (unless (derived-mode-p 'agent-shell-viewport-edit-mode)
+      (user-error "Not in a shell viewport buffer"))
     (let ((shell-buffer (agent-shell--shell-buffer))
-          (compose-buffer (agent-shell-prompt-compose--buffer))
+          (viewport-buffer (agent-shell-viewport--buffer))
           (prompt (string-trim (buffer-string))))
-      (when (agent-shell-prompt-compose--busy-p)
+      (when (agent-shell-viewport--busy-p)
         (unless (y-or-n-p "Interrupt?")
           (throw 'exit nil))
         (with-current-buffer shell-buffer
           (agent-shell-interrupt t))
-        (with-current-buffer compose-buffer
-          (agent-shell-prompt-compose-view-mode)
-          (agent-shell-prompt-compose--initialize
+        (with-current-buffer viewport-buffer
+          (agent-shell-viewport-view-mode)
+          (agent-shell-viewport--initialize
            :prompt prompt))
         (user-error "Aborted"))
       (when (string-empty-p (string-trim prompt))
-        (agent-shell-prompt-compose--initialize)
+        (agent-shell-viewport--initialize)
         (user-error "Nothing to send"))
-      (if (derived-mode-p 'agent-shell-prompt-compose-view-mode)
+      (if (derived-mode-p 'agent-shell-viewport-view-mode)
           (progn
-            (agent-shell-prompt-compose-edit-mode)
-            (agent-shell-prompt-compose--initialize))
+            (agent-shell-viewport-edit-mode)
+            (agent-shell-viewport--initialize))
         (let ((inhibit-read-only t))
           (markdown-overlays-put))
-        (agent-shell-prompt-compose-view-mode)
-        (agent-shell-prompt-compose--initialize :prompt prompt)
+        (agent-shell-viewport-view-mode)
+        (agent-shell-viewport--initialize :prompt prompt)
         ;; (setq view-exit-action 'kill-buffer) TODO
         (when (string-equal prompt "clear")
-          (agent-shell-prompt-compose-edit-mode)
-          (agent-shell-prompt-compose--initialize))
+          (agent-shell-viewport-edit-mode)
+          (agent-shell-viewport--initialize))
         (agent-shell--insert-to-shell-buffer
          :text prompt
          :submit t
@@ -174,12 +175,12 @@ Returns an alist with insertion details or nil otherwise:
         (let ((inhibit-read-only t))
           (markdown-overlays-put))))))
 
-(defun agent-shell-prompt-compose-interrupt ()
+(defun agent-shell-viewport-interrupt ()
   "Interrupt active agent shell request."
   (interactive)
   (catch 'exit
     (let ((shell-buffer (agent-shell--shell-buffer)))
-      (unless (agent-shell-prompt-compose--busy-p)
+      (unless (agent-shell-viewport--busy-p)
         (user-error "No pending request"))
       (unless (y-or-n-p "Interrupt?")
         (throw 'exit nil))
@@ -187,17 +188,17 @@ Returns an alist with insertion details or nil otherwise:
         (agent-shell-interrupt t))
       (user-error "Aborted"))))
 
-(cl-defun agent-shell-prompt-compose--initialize (&key prompt response)
-  "Initialize compose buffer.
+(cl-defun agent-shell-viewport--initialize (&key prompt response)
+  "Initialize viewport compose buffer.
 
 Optionally set its PROMPT and RESPONSE."
-  (unless (or (derived-mode-p 'agent-shell-prompt-compose-view-mode)
-              (derived-mode-p 'agent-shell-prompt-compose-edit-mode))
-    (user-error "Not in a shell compose buffer"))
+  (unless (or (derived-mode-p 'agent-shell-viewport-view-mode)
+              (derived-mode-p 'agent-shell-viewport-edit-mode))
+    (user-error "Not in a shell viewport buffer"))
   ;; Recalculate and cache position
-  (agent-shell-prompt-compose--position :force-refresh t)
+  (agent-shell-viewport--position :force-refresh t)
   (let ((inhibit-read-only t)
-        (compose-buffer (current-buffer)))
+        (viewport-buffer (current-buffer)))
     (erase-buffer)
     (when-let ((shell-buffer (agent-shell--shell-buffer)))
       (with-current-buffer shell-buffer
@@ -205,7 +206,7 @@ Optionally set its PROMPT and RESPONSE."
           ;; Insert read-only newline at the point-min
           ;; purely for display/layout purpose. This
           ;; is only needed for non-graphical header.
-          (with-current-buffer compose-buffer
+          (with-current-buffer viewport-buffer
             (insert (propertize "\n"
                                 'read-only t
                                 'cursor-intangible t
@@ -213,117 +214,117 @@ Optionally set its PROMPT and RESPONSE."
                                 'rear-nonsticky '(read-only cursor-intangible)))))))
     (when prompt
       (insert
-       (if (derived-mode-p 'agent-shell-prompt-compose-view-mode)
+       (if (derived-mode-p 'agent-shell-viewport-view-mode)
            (propertize (concat prompt "\n\n")
                        'rear-nonsticky t
-                       'agent-shell-prompt-compose-prompt t
+                       'agent-shell-viewport-prompt t
                        'face 'font-lock-doc-face)
          prompt)))
     (when response
       (insert response))))
 
-(defun agent-shell-prompt-compose--prompt ()
+(defun agent-shell-viewport--prompt ()
   "Return the buffer prompt."
   (save-excursion
     (goto-char (point-min))
-    (when-let* ((start (if (get-text-property (point-min) 'agent-shell-prompt-compose-prompt)
+    (when-let* ((start (if (get-text-property (point-min) 'agent-shell-viewport-prompt)
                            (point-min)
-                         (next-single-property-change (point-min) 'agent-shell-prompt-compose-prompt)))
-                (found (get-text-property start 'agent-shell-prompt-compose-prompt)))
+                         (next-single-property-change (point-min) 'agent-shell-viewport-prompt)))
+                (found (get-text-property start 'agent-shell-viewport-prompt)))
       (string-trim
        (buffer-substring-no-properties
         start
         (or (next-single-property-change
-             start 'agent-shell-prompt-compose-prompt)
+             start 'agent-shell-viewport-prompt)
             (point-max)))))))
 
-(defun agent-shell-prompt-compose--response ()
+(defun agent-shell-viewport--response ()
   "Return the buffer response."
   (save-excursion
     (goto-char (point-min))
-    (when-let* ((start (if (get-text-property (point-min) 'agent-shell-prompt-compose-prompt)
+    (when-let* ((start (if (get-text-property (point-min) 'agent-shell-viewport-prompt)
                            (point-min)
-                         (next-single-property-change (point-min) 'agent-shell-prompt-compose-prompt)))
-                (found (get-text-property start 'agent-shell-prompt-compose-prompt))
-                (end (next-single-property-change start 'agent-shell-prompt-compose-prompt)))
+                         (next-single-property-change (point-min) 'agent-shell-viewport-prompt)))
+                (found (get-text-property start 'agent-shell-viewport-prompt))
+                (end (next-single-property-change start 'agent-shell-viewport-prompt)))
       (buffer-substring end (point-max)))))
 
-(defun agent-shell-prompt-compose--prompt-start ()
+(defun agent-shell-viewport--prompt-start ()
   "Return the start position of the prompt, or nil if no prompt."
   (save-excursion
     (goto-char (point-min))
-    (when-let ((start (if (get-text-property (point-min) 'agent-shell-prompt-compose-prompt)
+    (when-let ((start (if (get-text-property (point-min) 'agent-shell-viewport-prompt)
                           (point-min)
-                        (next-single-property-change (point-min) 'agent-shell-prompt-compose-prompt))))
-      (when (get-text-property start 'agent-shell-prompt-compose-prompt)
+                        (next-single-property-change (point-min) 'agent-shell-viewport-prompt))))
+      (when (get-text-property start 'agent-shell-viewport-prompt)
         start))))
 
-(defun agent-shell-prompt-compose--response-start ()
+(defun agent-shell-viewport--response-start ()
   "Return the start position of the response, or nil if no response."
   (save-excursion
     (goto-char (point-min))
-    (when-let* ((start (if (get-text-property (point-min) 'agent-shell-prompt-compose-prompt)
+    (when-let* ((start (if (get-text-property (point-min) 'agent-shell-viewport-prompt)
                            (point-min)
-                         (next-single-property-change (point-min) 'agent-shell-prompt-compose-prompt)))
-                (found (get-text-property start 'agent-shell-prompt-compose-prompt))
-                (end (next-single-property-change start 'agent-shell-prompt-compose-prompt)))
+                         (next-single-property-change (point-min) 'agent-shell-viewport-prompt)))
+                (found (get-text-property start 'agent-shell-viewport-prompt))
+                (end (next-single-property-change start 'agent-shell-viewport-prompt)))
       (when (< end (point-max))
         end))))
 
-(defun agent-shell-prompt-compose-cancel ()
+(defun agent-shell-viewport-compose-cancel ()
   "Cancel prompt composition."
   (interactive)
-  (unless (or (derived-mode-p 'agent-shell-prompt-compose-view-mode)
-              (derived-mode-p 'agent-shell-prompt-compose-edit-mode))
-    (user-error "Not in a shell compose buffer"))
-  (if (or (derived-mode-p 'agent-shell-prompt-compose-view-mode)
+  (unless (or (derived-mode-p 'agent-shell-viewport-view-mode)
+              (derived-mode-p 'agent-shell-viewport-edit-mode))
+    (user-error "Not in a shell viewport buffer"))
+  (if (or (derived-mode-p 'agent-shell-viewport-view-mode)
           (with-current-buffer (agent-shell--shell-buffer)
             (not (shell-maker-history))))
       (bury-buffer)
     ;; Edit mode
     (when (or (string-empty-p (string-trim (buffer-string)))
-              (y-or-n-p "Discard compose buffer? "))
-      (agent-shell-prompt-compose-view-last))))
+              (y-or-n-p "Discard composed prompt? "))
+      (agent-shell-viewport-view-last))))
 
-(defun agent-shell-prompt-compose-view-last ()
+(defun agent-shell-viewport-view-last ()
   "Display the last request/response interaction."
   (interactive)
-  (unless (or (derived-mode-p 'agent-shell-prompt-compose-view-mode)
-              (derived-mode-p 'agent-shell-prompt-compose-edit-mode))
-    (user-error "Not in a shell compose buffer"))
+  (unless (or (derived-mode-p 'agent-shell-viewport-view-mode)
+              (derived-mode-p 'agent-shell-viewport-edit-mode))
+    (user-error "Not in a shell viewport buffer"))
   (when-let ((shell-buffer (agent-shell--shell-buffer)))
     (with-current-buffer shell-buffer
       (goto-char comint-last-input-start)))
-  (agent-shell-prompt-compose-view-mode)
-  (agent-shell-prompt-compose-refresh))
+  (agent-shell-viewport-view-mode)
+  (agent-shell-viewport-refresh))
 
-(defun agent-shell-prompt-compose-refresh ()
-  "Refresh compose buffer content with current item from shell."
+(defun agent-shell-viewport-refresh ()
+  "Refresh viewport buffer content with current item from shell."
   (interactive)
-  (unless (or (derived-mode-p 'agent-shell-prompt-compose-view-mode)
-              (derived-mode-p 'agent-shell-prompt-compose-edit-mode))
-    (user-error "Not in a shell compose buffer"))
+  (unless (or (derived-mode-p 'agent-shell-viewport-view-mode)
+              (derived-mode-p 'agent-shell-viewport-edit-mode))
+    (user-error "Not in a shell viewport buffer"))
   (when-let ((shell-buffer (agent-shell--shell-buffer))
-             (compose-buffer (agent-shell-prompt-compose--buffer))
+             (viewport-buffer (agent-shell-viewport--buffer))
              (current (with-current-buffer shell-buffer
                         (or (shell-maker--command-and-response-at-point)
                             (shell-maker-next-command-and-response t)))))
-    (agent-shell-prompt-compose--initialize
+    (agent-shell-viewport--initialize
      :prompt (car current)
      :response (cdr current))
     (goto-char (point-min))
     current))
 
-(defun agent-shell-prompt-compose-next-item ()
+(defun agent-shell-viewport-next-item ()
   "Go to next item.
 
 If at point-max, attempt to switch to next interaction."
   (interactive)
-  (unless (derived-mode-p 'agent-shell-prompt-compose-view-mode)
-    (error "Not in a compose buffer"))
+  (unless (derived-mode-p 'agent-shell-viewport-view-mode)
+    (error "Not in a viewport buffer"))
   (let* ((current-pos (point))
-         (prompt-start (agent-shell-prompt-compose--prompt-start))
-         (response-start (agent-shell-prompt-compose--response-start))
+         (prompt-start (agent-shell-viewport--prompt-start))
+         (response-start (agent-shell-viewport--response-start))
          (block-pos (save-mark-and-excursion
                       (agent-shell-ui-forward-block)))
          (button-pos (save-mark-and-excursion
@@ -347,21 +348,21 @@ If at point-max, attempt to switch to next interaction."
           (goto-char next-pos))
       ;; At point-max with no more items, try next interaction
       (condition-case nil
-          (agent-shell-prompt-compose-next-interaction)
+          (agent-shell-viewport-next-page)
         (error
          ;; At the end of all interactions, stay at point-max
          nil)))))
 
-(defun agent-shell-prompt-compose-previous-item ()
+(defun agent-shell-viewport-previous-item ()
   "Go to previous item.
 
 If at the first item, attempt to switch to previous interaction."
   (interactive)
-  (unless (derived-mode-p 'agent-shell-prompt-compose-view-mode)
-    (error "Not in a compose buffer"))
+  (unless (derived-mode-p 'agent-shell-viewport-view-mode)
+    (error "Not in a viewport buffer"))
   (let* ((current-pos (point))
-         (prompt-start (agent-shell-prompt-compose--prompt-start))
-         (response-start (agent-shell-prompt-compose--response-start))
+         (prompt-start (agent-shell-viewport--prompt-start))
+         (response-start (agent-shell-viewport--response-start))
          (block-pos (save-mark-and-excursion
                       (let ((pos (agent-shell-ui-backward-block)))
                         (when (and pos (< pos current-pos))
@@ -387,34 +388,34 @@ If at the first item, attempt to switch to previous interaction."
       ;; No more items before current position, try previous interaction
       (condition-case nil
           ;; Switch to previous page and stop at point-max (call next-interaction directly)
-          (agent-shell-prompt-compose-next-interaction :backwards t)
+          (agent-shell-viewport-next-page :backwards t)
         (error
          ;; At the beginning of all interactions, stay at first item
          (when prompt-start
            (goto-char prompt-start)))))))
 
-(cl-defun agent-shell-prompt-compose--buffer (&key shell-buffer existing-only)
-  "Get the compose buffer associated with a SHELL-BUFFER.
+(cl-defun agent-shell-viewport--buffer (&key shell-buffer existing-only)
+  "Get the viewport buffer associated with a SHELL-BUFFER.
 
 With EXISTING-ONLY, only return existing buffers without creating."
   (when-let ((shell-buffer (or shell-buffer
                                (agent-shell--shell-buffer))))
     (with-current-buffer shell-buffer
-      (let* ((compose-buffer-name (concat (buffer-name shell-buffer)
-                                          " [compose]"))
-             (compose-buffer (get-buffer compose-buffer-name)))
-        (if compose-buffer
-            compose-buffer
+      (let* ((viewport-buffer-name (concat (buffer-name shell-buffer)
+                                          " [viewport]"))
+             (viewport-buffer (get-buffer viewport-buffer-name)))
+        (if viewport-buffer
+            viewport-buffer
           (if existing-only
               nil
-            (with-current-buffer (get-buffer-create compose-buffer-name)
-              (agent-shell-prompt-compose-edit-mode)
+            (with-current-buffer (get-buffer-create viewport-buffer-name)
+              (agent-shell-viewport-edit-mode)
               (current-buffer))))))))
 
-(defun agent-shell-prompt-compose-reply ()
-  "Reply as a follow-up and compose another query."
+(defun agent-shell-viewport-reply ()
+  "Reply as a follow-up and compose another prompt/query."
   (interactive)
-  (when (agent-shell-prompt-compose--busy-p)
+  (when (agent-shell-viewport--busy-p)
     (user-error "Busy, please wait"))
   (let* ((region (map-elt (agent-shell--get-region :deactivate t) :content))
          (block-quoted-text (when region
@@ -426,31 +427,31 @@ With EXISTING-ONLY, only return existing buffers without creating."
                                "\n\n"))))
     (with-current-buffer (agent-shell--shell-buffer)
       (goto-char (point-max)))
-    (agent-shell-prompt-compose-edit-mode)
+    (agent-shell-viewport-edit-mode)
     (if block-quoted-text
         (progn
-          (agent-shell-prompt-compose--initialize :prompt block-quoted-text)
+          (agent-shell-viewport--initialize :prompt block-quoted-text)
           (goto-char (point-max)))
-      (agent-shell-prompt-compose--initialize)
+      (agent-shell-viewport--initialize)
       (goto-char (point-min)))))
 
-(defun agent-shell-prompt-compose-previous-interaction ()
+(defun agent-shell-viewport-previous-page ()
   "Show previous interaction (request / response)."
   (interactive)
-  (agent-shell-prompt-compose-next-interaction :backwards t :start-at-top t))
+  (agent-shell-viewport-next-page :backwards t :start-at-top t))
 
-(cl-defun agent-shell-prompt-compose-next-interaction (&key backwards start-at-top)
+(cl-defun agent-shell-viewport-next-page (&key backwards start-at-top)
   "Show next interaction (request / response).
 
 If BACKWARDS is non-nil, go to previous interaction.
 If START-AT-TOP is non-nil, position at point-min regardless of direction."
   (interactive)
-  (unless (derived-mode-p 'agent-shell-prompt-compose-view-mode)
-    (error "Not in a compose buffer"))
-  (when (agent-shell-prompt-compose--busy-p)
+  (unless (derived-mode-p 'agent-shell-viewport-view-mode)
+    (error "Not in a viewport buffer"))
+  (when (agent-shell-viewport--busy-p)
     (user-error "Busy... please wait"))
   (when-let ((shell-buffer (agent-shell--shell-buffer))
-             (compose-buffer (agent-shell-prompt-compose--buffer))
+             (viewport-buffer (agent-shell-viewport--buffer))
              (next (with-current-buffer shell-buffer
                      (if backwards
                          (when (save-excursion
@@ -464,67 +465,67 @@ If START-AT-TOP is non-nil, position at point-min regardless of direction."
                                  (= orig-line (point))))
                          (error "No next page")))
                      (shell-maker-next-command-and-response backwards))))
-    (agent-shell-prompt-compose--initialize
+    (agent-shell-viewport--initialize
      :prompt (car next) :response (cdr next))
     (goto-char (if start-at-top
                    (point-min)
                  (if backwards (point-max) (point-min))))
-    (agent-shell-prompt-compose--update-header)
+    (agent-shell-viewport--update-header)
     next))
 
-(defun agent-shell-prompt-compose-set-session-model ()
+(defun agent-shell-viewport-set-session-model ()
   "Set session model."
   (interactive)
   (let* ((shell-buffer (or (agent-shell--current-shell)
                            (user-error "Not in an agent-shell buffer")))
-         (compose-buffer (agent-shell-prompt-compose--buffer
+         (viewport-buffer (agent-shell-viewport--buffer
                           :shell-buffer shell-buffer
                           :existing-only t)))
     (with-current-buffer shell-buffer
       (agent-shell-set-session-model
        (lambda ()
-         (with-current-buffer compose-buffer
-           (agent-shell-prompt-compose--update-header)))))))
+         (with-current-buffer viewport-buffer
+           (agent-shell-viewport--update-header)))))))
 
-(defun agent-shell-prompt-compose-set-session-mode ()
+(defun agent-shell-viewport-set-session-mode ()
   "Set session mode."
   (interactive)
   (let* ((shell-buffer (or (agent-shell--current-shell)
                            (user-error "Not in an agent-shell buffer")))
-         (compose-buffer (agent-shell-prompt-compose--buffer
+         (viewport-buffer (agent-shell-viewport--buffer
                           :shell-buffer shell-buffer
                           :existing-only t)))
     (with-current-buffer shell-buffer
       (agent-shell-set-session-mode
        (lambda ()
-         (when compose-buffer
-           (with-current-buffer compose-buffer
-             (agent-shell-prompt-compose--update-header))))))))
+         (when viewport-buffer
+           (with-current-buffer viewport-buffer
+             (agent-shell-viewport--update-header))))))))
 
-(defun agent-shell-prompt-compose-cycle-session-mode ()
+(defun agent-shell-viewport-cycle-session-mode ()
   "Cycle through available session modes."
   (interactive)
   (let* ((shell-buffer (or (agent-shell--current-shell)
                            (user-error "Not in an agent-shell buffer")))
-         (compose-buffer (agent-shell-prompt-compose--buffer
+         (viewport-buffer (agent-shell-viewport--buffer
                           :shell-buffer shell-buffer
                           :existing-only t)))
     (with-current-buffer shell-buffer
       (agent-shell-cycle-session-mode
        (lambda ()
-         (when compose-buffer
-           (with-current-buffer compose-buffer
-             (agent-shell-prompt-compose--update-header))))))))
+         (when viewport-buffer
+           (with-current-buffer viewport-buffer
+             (agent-shell-viewport--update-header))))))))
 
-(cl-defun agent-shell-prompt-compose--position (&key force-refresh)
+(cl-defun agent-shell-viewport--position (&key force-refresh)
   "Return the position in history of the shell buffer.
 
 When FORCE-REFRESH is non-nil, recalculate and update cache."
-  (unless (or (derived-mode-p 'agent-shell-prompt-compose-view-mode)
-              (derived-mode-p 'agent-shell-prompt-compose-edit-mode))
-    (user-error "Not in a shell compose buffer"))
-  (if (and (not force-refresh) agent-shell-prompt-compose--position-cache)
-      agent-shell-prompt-compose--position-cache
+  (unless (or (derived-mode-p 'agent-shell-viewport-view-mode)
+              (derived-mode-p 'agent-shell-viewport-edit-mode))
+    (user-error "Not in a shell viewport buffer"))
+  (if (and (not force-refresh) agent-shell-viewport--position-cache)
+      agent-shell-viewport--position-cache
     (let* ((shell-buffer (agent-shell--shell-buffer))
            (current (with-current-buffer shell-buffer
                       (shell-maker--command-and-response-at-point)))
@@ -536,53 +537,65 @@ When FORCE-REFRESH is non-nil, recalculate and update cache."
                            (history
                             (cons (1+ (length history))
                                   (1+ (length history)))))))
-      (setq agent-shell-prompt-compose--position-cache position)
+      (setq agent-shell-viewport--position-cache position)
       position)))
 
-(defun agent-shell-prompt-compose--busy-p ()
+(defun agent-shell-viewport--busy-p ()
   "Return non-nil if the associated shell buffer is busy."
   (when-let ((shell-buffer (agent-shell--shell-buffer :no-error t)))
     (with-current-buffer shell-buffer
       shell-maker--busy)))
 
-(defun agent-shell-prompt-compose--update-header ()
+(defun agent-shell-viewport--update-header ()
   "Update header and mode line based on `agent-shell-header-style'.
 
 Automatically determines qualifier and bindings based on current major mode."
-  (unless (or (derived-mode-p 'agent-shell-prompt-compose-view-mode)
-              (derived-mode-p 'agent-shell-prompt-compose-edit-mode))
-    (user-error "Not in a shell compose buffer"))
-  (let* ((pos (or (agent-shell-prompt-compose--position)
+  (unless (or (derived-mode-p 'agent-shell-viewport-view-mode)
+              (derived-mode-p 'agent-shell-viewport-edit-mode))
+    (user-error "Not in a shell viewport buffer"))
+  (let* ((pos (or (agent-shell-viewport--position)
                   (cons 1 1)))
          (pos-label (format "%d/%d" (car pos) (cdr pos)))
          (qualifier (cond
-                     ((agent-shell-prompt-compose--busy-p)
+                     ((agent-shell-viewport--busy-p)
                       (format "[%s][busy]" pos-label))
-                     ((derived-mode-p 'agent-shell-prompt-compose-edit-mode)
+                     ((derived-mode-p 'agent-shell-viewport-edit-mode)
                       (format "[%s][edit]" pos-label))
-                     ((derived-mode-p 'agent-shell-prompt-compose-view-mode)
+                     ((derived-mode-p 'agent-shell-viewport-view-mode)
                       (format "[%s][view]" pos-label))))
          (bindings (cond
-                    ((derived-mode-p 'agent-shell-prompt-compose-edit-mode)
+                    ((derived-mode-p 'agent-shell-viewport-edit-mode)
                      (list
-                      `((:key . ,(key-description (where-is-internal 'agent-shell-prompt-compose-send agent-shell-prompt-compose-edit-mode-map t)))
+                      `((:key . ,(key-description (where-is-internal
+                                                   'agent-shell-viewport-compose-send
+                                                   agent-shell-viewport-edit-mode-map t)))
                         (:description . "send"))
-                      `((:key . ,(key-description (where-is-internal 'agent-shell-prompt-compose-cancel agent-shell-prompt-compose-edit-mode-map t)))
+                      `((:key . ,(key-description (where-is-internal
+                                                   'agent-shell-viewport-compose-cancel
+                                                   agent-shell-viewport-edit-mode-map t)))
                         (:description . "cancel"))))
-                    ((derived-mode-p 'agent-shell-prompt-compose-view-mode)
+                    ((derived-mode-p 'agent-shell-viewport-view-mode)
                      (append
                       (list
-                       `((:key . ,(key-description (where-is-internal 'agent-shell-prompt-compose-next-item agent-shell-prompt-compose-view-mode-map t)))
+                       `((:key . ,(key-description (where-is-internal
+                                                    'agent-shell-viewport-next-item
+                                                    agent-shell-viewport-view-mode-map t)))
                          (:description . "next"))
-                       `((:key . ,(key-description (where-is-internal 'agent-shell-prompt-compose-previous-item agent-shell-prompt-compose-view-mode-map t)))
+                       `((:key . ,(key-description (where-is-internal
+                                                    'agent-shell-viewport-previous-item
+                                                    agent-shell-viewport-view-mode-map t)))
                          (:description . "previous")))
-                      (unless (agent-shell-prompt-compose--busy-p)
+                      (unless (agent-shell-viewport--busy-p)
                         (list
-                         `((:key . ,(key-description (where-is-internal 'agent-shell-prompt-compose-reply agent-shell-prompt-compose-view-mode-map t)))
+                         `((:key . ,(key-description (where-is-internal
+                                                      'agent-shell-viewport-reply
+                                                      agent-shell-viewport-view-mode-map t)))
                            (:description . "reply"))))
-                      (when (agent-shell-prompt-compose--busy-p)
+                      (when (agent-shell-viewport--busy-p)
                         (list
-                         `((:key . ,(key-description (where-is-internal 'agent-shell-prompt-compose-interrupt agent-shell-prompt-compose-view-mode-map t)))
+                         `((:key . ,(key-description (where-is-internal
+                                                      'agent-shell-viewport-interrupt
+                                                      agent-shell-viewport-view-mode-map t)))
                            (:description . "interrupt")))))))))
     (when-let* ((shell-buffer (agent-shell--shell-buffer))
                 (header (with-current-buffer shell-buffer
@@ -597,29 +610,29 @@ Automatically determines qualifier and bindings based on current major mode."
                                                       :bindings bindings))))))
       (setq-local header-line-format header))))
 
-(defvar-local agent-shell-prompt-compose--clean-up t)
+(defvar-local agent-shell-viewport--clean-up t)
 
 ;; Continuously fetching position can get expensive. Cache it.
-(defvar-local agent-shell-prompt-compose--position-cache nil
+(defvar-local agent-shell-viewport--position-cache nil
   "Cached position value (CURRENT . TOTAL).")
 
-(defun agent-shell-prompt-compose--clean-up ()
+(defun agent-shell-viewport--clean-up ()
   "Clean up resources.
 
 For example, offer to kill associated shell session."
-  (unless (or (derived-mode-p 'agent-shell-prompt-compose-view-mode)
-              (derived-mode-p 'agent-shell-prompt-compose-edit-mode))
-    (user-error "Not in a shell compose buffer"))
-  (if (and agent-shell-prompt-compose--clean-up
-           ;; Only offer to kill shell buffers when compose buffer
-           ;; is explicitly being killed from a compose buffer.
+  (unless (or (derived-mode-p 'agent-shell-viewport-view-mode)
+              (derived-mode-p 'agent-shell-viewport-edit-mode))
+    (user-error "Not in a shell viewport buffer"))
+  (if (and agent-shell-viewport--clean-up
+           ;; Only offer to kill shell buffers when viewport buffer
+           ;; is explicitly being killed from a viewport buffer.
            (eq (current-buffer)
                (window-buffer (selected-window))))
       ;; Temporarily disable cleaning up to avoid multiple clean-ups
-      ;; triggered by shell buffers attempting to kill compose buffer.
-      (let ((agent-shell-prompt-compose--clean-up nil))
+      ;; triggered by shell buffers attempting to kill viewport buffer.
+      (let ((agent-shell-viewport--clean-up nil))
         (when-let ((shell-buffers (seq-filter (lambda (shell-buffer)
-                                                (equal (agent-shell-prompt-compose--buffer
+                                                (equal (agent-shell-viewport--buffer
                                                         :shell-buffer shell-buffer
                                                         :existing-only t)
                                                        (current-buffer)))
@@ -629,55 +642,55 @@ For example, offer to kill associated shell session."
                   (kill-buffer shell-buffer))
                 shell-buffers)))))
 
-(defvar agent-shell-prompt-compose-edit-mode-map
+(defvar agent-shell-viewport-edit-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "C-c C-c") #'agent-shell-prompt-compose-send)
-    (define-key map (kbd "C-c C-k") #'agent-shell-prompt-compose-cancel)
-    (define-key map (kbd "C-<tab>") #'agent-shell-prompt-compose-cycle-session-mode)
-    (define-key map (kbd "C-c C-m") #'agent-shell-prompt-compose-set-session-mode)
-    (define-key map (kbd "C-c C-v") #'agent-shell-prompt-compose-set-session-model)
+    (define-key map (kbd "C-c C-c") #'agent-shell-viewport-compose-send)
+    (define-key map (kbd "C-c C-k") #'agent-shell-viewport-compose-cancel)
+    (define-key map (kbd "C-<tab>") #'agent-shell-viewport-cycle-session-mode)
+    (define-key map (kbd "C-c C-m") #'agent-shell-viewport-set-session-mode)
+    (define-key map (kbd "C-c C-v") #'agent-shell-viewport-set-session-model)
     (define-key map (kbd "C-c C-o") #'agent-shell-other-buffer)
     map)
-  "Keymap for `agent-shell-prompt-compose-edit-mode'.")
+  "Keymap for `agent-shell-viewport-edit-mode'.")
 
-(define-derived-mode agent-shell-prompt-compose-edit-mode text-mode "Agent Compose"
+(define-derived-mode agent-shell-viewport-edit-mode text-mode "Agent Viewport (edit)"
   "Major mode for composing agent shell prompts.
 
-\\{agent-shell-prompt-compose-edit-mode-map}"
+\\{agent-shell-viewport-edit-mode-map}"
   (cursor-intangible-mode +1)
   (setq buffer-read-only nil)
-  (agent-shell-prompt-compose--update-header)
+  (agent-shell-viewport--update-header)
   (let ((inhibit-read-only t))
     (erase-buffer))
-  (add-hook 'kill-buffer-hook #'agent-shell-prompt-compose--clean-up nil t))
+  (add-hook 'kill-buffer-hook #'agent-shell-viewport--clean-up nil t))
 
-(defvar agent-shell-prompt-compose-view-mode-map
+(defvar agent-shell-viewport-view-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "C-c C-c") #'agent-shell-prompt-compose-interrupt)
-    (define-key map (kbd "<tab>") #'agent-shell-prompt-compose-next-item)
-    (define-key map (kbd "<backtab>") #'agent-shell-prompt-compose-previous-item)
-    (define-key map (kbd "f") #'agent-shell-prompt-compose-next-interaction)
-    (define-key map (kbd "b") #'agent-shell-prompt-compose-previous-interaction)
-    (define-key map (kbd "r") #'agent-shell-prompt-compose-reply)
+    (define-key map (kbd "C-c C-c") #'agent-shell-viewport-interrupt)
+    (define-key map (kbd "<tab>") #'agent-shell-viewport-next-item)
+    (define-key map (kbd "<backtab>") #'agent-shell-viewport-previous-item)
+    (define-key map (kbd "f") #'agent-shell-viewport-next-page)
+    (define-key map (kbd "b") #'agent-shell-viewport-previous-page)
+    (define-key map (kbd "r") #'agent-shell-viewport-reply)
     (define-key map (kbd "q") #'bury-buffer)
-    (define-key map (kbd "C-<tab>") #'agent-shell-prompt-compose-cycle-session-mode)
-    (define-key map (kbd "v") #'agent-shell-prompt-compose-set-session-model)
-    (define-key map (kbd "m") #'agent-shell-prompt-compose-set-session-mode)
+    (define-key map (kbd "C-<tab>") #'agent-shell-viewport-cycle-session-mode)
+    (define-key map (kbd "v") #'agent-shell-viewport-set-session-model)
+    (define-key map (kbd "m") #'agent-shell-viewport-set-session-mode)
     (define-key map (kbd "o") #'agent-shell-other-buffer)
     (define-key map (kbd "C-c C-o") #'agent-shell-other-buffer)
     map)
-  "Keymap for `agent-shell-prompt-compose-view-mode'.")
+  "Keymap for `agent-shell-viewport-view-mode'.")
 
-(define-derived-mode agent-shell-prompt-compose-view-mode text-mode "Agent Compose"
+(define-derived-mode agent-shell-viewport-view-mode text-mode "Agent Viewport (view)"
   "Major mode for viewing agent shell prompts (read-only).
 
-\\{agent-shell-prompt-compose-view-mode-map}"
+\\{agent-shell-viewport-view-mode-map}"
   (cursor-intangible-mode +1)
   (agent-shell-ui-mode +1)
-  (agent-shell-prompt-compose--update-header)
+  (agent-shell-viewport--update-header)
   (setq buffer-read-only t)
-  (add-hook 'kill-buffer-hook #'agent-shell-prompt-compose--clean-up nil t))
+  (add-hook 'kill-buffer-hook #'agent-shell-viewport--clean-up nil t))
 
-(provide 'agent-shell-prompt-compose)
+(provide 'agent-shell-viewport)
 
-;;; agent-shell-prompt-compose.el ends here
+;;; agent-shell-viewport.el ends here

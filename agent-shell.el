@@ -62,7 +62,7 @@
 (require 'agent-shell-opencode)
 (require 'agent-shell-qwen)
 (require 'agent-shell-heartbeat)
-(require 'agent-shell-prompt-compose)
+(require 'agent-shell-viewport)
 
 (declare-function projectile-current-project-files "projectile")
 (declare-function projectile-project-root "projectile")
@@ -169,11 +169,11 @@ See `display-buffer' for the format of display actions."
   :type 'boolean
   :group 'agent-shell)
 
-(defcustom agent-shell-prefer-compose-buffer nil
-  "Non-nil makes `agent-shell' prefer compose buffers over shell buffers.
+(defcustom agent-shell-prefer-viewport-interaction nil
+  "Non-nil makes `agent-shell' prefer viewport interaction over shell interaction.
 
-For example, `agent-shell-send*' will insert text into the compose
-buffer instead of the shell buffer.  If no compose buffer exists, one
+For example, `agent-shell-send*' will insert text into the viewport
+buffer instead of the shell buffer.  If no viewport buffer exists, one
 will be created."
   :type 'boolean
   :group 'agent-shell)
@@ -369,12 +369,12 @@ If already in a shell, invoke `agent-shell-toggle'.
 
 With prefix argument NEW-SHELL, force start a new shell."
   (interactive "P")
-  (if agent-shell-prefer-compose-buffer
+  (if agent-shell-prefer-viewport-interaction
       (if (and (not new-shell)
-               (or (derived-mode-p 'agent-shell-prompt-compose-view-mode)
-                   (derived-mode-p 'agent-shell-prompt-compose-edit-mode)))
+               (or (derived-mode-p 'agent-shell-viewport-view-mode)
+                   (derived-mode-p 'agent-shell-viewport-edit-mode)))
           (agent-shell-toggle)
-        (agent-shell-prompt-compose--show-buffer
+        (agent-shell-viewport--show-buffer
          :shell-buffer (when new-shell
                          (agent-shell--start :config (or agent-shell-preferred-agent-config
                                                          (agent-shell-select-config
@@ -408,8 +408,8 @@ With prefix argument NEW-SHELL, force start a new shell."
 (defun agent-shell-toggle ()
   "Toggle agent shell display."
   (interactive)
-  (let ((shell-buffer (if agent-shell-prefer-compose-buffer
-                          (agent-shell-prompt-compose--buffer)
+  (let ((shell-buffer (if agent-shell-prefer-viewport-interaction
+                          (agent-shell-viewport--buffer)
                         (agent-shell--current-shell))))
     (unless shell-buffer
       (user-error "No agent shell buffers available for current project"))
@@ -432,7 +432,7 @@ Always prompts for agent selection, even if existing shells are available."
 (defun agent-shell-prompt-compose ()
   "Compose an `agent-shell' prompt in a dedicated buffer."
   (interactive)
-  (agent-shell-prompt-compose--show-buffer))
+  (agent-shell-viewport--show-buffer))
 
 (cl-defun agent-shell-start (&key config)
   "Programmatically start shell with CONFIG.
@@ -481,16 +481,16 @@ Returns an empty string if no icon should be displayed."
               (buffer-list)))
 
 (defun agent-shell-other-buffer ()
-  "Switch to other associated buffer (compose vs shell)."
+  "Switch to other associated buffer (viewport vs shell)."
   (interactive)
-  (cond ((or (derived-mode-p 'agent-shell-prompt-compose-view-mode)
-             (derived-mode-p 'agent-shell-prompt-compose-edit-mode))
+  (cond ((or (derived-mode-p 'agent-shell-viewport-view-mode)
+             (derived-mode-p 'agent-shell-viewport-edit-mode))
          (switch-to-buffer (or (agent-shell--shell-buffer :no-create t)
                                "No shell available")))
         ((derived-mode-p 'agent-shell-mode)
-         (switch-to-buffer (or (agent-shell-prompt-compose--buffer
+         (switch-to-buffer (or (agent-shell-viewport--buffer
                                 :shell-buffer (current-buffer))
-                               "Not in a shell compose buffer")))
+                               "Not in a shell viewport buffer")))
         (t
          (user-error "Not in an agent-shell buffer"))))
 
@@ -579,14 +579,14 @@ Flow:
               (shell-maker--current-request-id))
     (cond ((not (map-elt (agent-shell--state) :client))
            (when-let ((_ (map-elt shell :buffer))
-                      (compose-buffer (agent-shell-prompt-compose--buffer
+                      (viewport-buffer (agent-shell-viewport--buffer
                                        :shell-buffer (map-elt shell :buffer)
                                        :existing-only t)))
-             (with-current-buffer compose-buffer
-               (agent-shell-prompt-compose-view-mode)
-               (agent-shell-prompt-compose--initialize
+             (with-current-buffer viewport-buffer
+               (agent-shell-viewport-view-mode)
+               (agent-shell-viewport--initialize
                 :prompt  command
-                :response (agent-shell-prompt-compose--response))))
+                :response (agent-shell-viewport--response))))
            (when (agent-shell--initialize-client :shell shell)
              (agent-shell--handle :command command :shell shell)))
           ((or (not (map-nested-elt (agent-shell--state) '(:client :request-handlers)))
@@ -855,10 +855,10 @@ Flow:
             :navigation 'never)
            (agent-shell-jump-to-latest-permission-button-row)
            (when-let ((_ (map-elt state :buffer))
-                      (compose-buffer (agent-shell-prompt-compose--buffer
+                      (viewport-buffer (agent-shell-viewport--buffer
                                        :shell-buffer (map-elt state :buffer)
                                        :existing-only t)))
-             (with-current-buffer compose-buffer
+             (with-current-buffer viewport-buffer
                (agent-shell-jump-to-latest-permission-button-row)))
            (map-put! state :last-entry-type "session/request_permission"))
           ((equal .method "fs/read_text_file")
@@ -1272,11 +1272,11 @@ For example, shut down ACP client."
   (agent-shell-heartbeat-stop
    :heartbeat (map-elt (agent-shell--state) :heartbeat))
   (when-let ((_ (map-elt (agent-shell--state) :buffer))
-             (compose-buffer (agent-shell-prompt-compose--buffer
+             (viewport-buffer (agent-shell-viewport--buffer
                               :shell-buffer (map-elt (agent-shell--state) :buffer)
                               :existing-only t))
-             (buffer-live-p compose-buffer))
-    (kill-buffer compose-buffer)))
+             (buffer-live-p viewport-buffer))
+    (kill-buffer viewport-buffer)))
 
 (cl-defun agent-shell--capture-screenshot (&key destination-dir)
   "Capture a screenshot and save it to DESTINATION-DIR.
@@ -1488,12 +1488,12 @@ Set NEW-SESSION to start a separate new session."
                                                     (when (get-buffer-window shell-buffer)
                                                       (with-current-buffer shell-buffer
                                                         (agent-shell--update-header-and-mode-line)))
-                                                    (when-let* ((compose-buffer (agent-shell-prompt-compose--buffer
+                                                    (when-let* ((viewport-buffer (agent-shell-viewport--buffer
                                                                                  :shell-buffer shell-buffer
                                                                                  :existing-only t))
-                                                                (_ (get-buffer-window compose-buffer)))
-                                                      (with-current-buffer compose-buffer
-                                                        (agent-shell-prompt-compose--update-header)))))
+                                                                (_ (get-buffer-window viewport-buffer)))
+                                                      (with-current-buffer viewport-buffer
+                                                        (agent-shell-viewport--update-header)))))
                                       :client-maker (map-elt config :client-maker)
                                       :needs-authentication (map-elt config :needs-authentication)
                                       :authenticate-request-maker (map-elt config :authenticate-request-maker)
@@ -1512,10 +1512,10 @@ Set NEW-SESSION to start a separate new session."
 (cl-defun agent-shell--delete-fragment (&key state block-id)
   "Delete fragment with STATE and BLOCK-ID."
   (when-let ((_ (map-elt state :buffer))
-             (compose-buffer (agent-shell-prompt-compose--buffer
+             (viewport-buffer (agent-shell-viewport--buffer
                               :shell-buffer (map-elt state :buffer)
                               :existing-only t)))
-    (with-current-buffer compose-buffer
+    (with-current-buffer viewport-buffer
       (let ((inhibit-read-only t))
         (agent-shell-ui-delete-fragment :namespace-id (map-elt state :request-count) :block-id block-id))))
   (with-current-buffer (map-elt state :buffer)
@@ -1537,10 +1537,10 @@ Optional flags: APPEND text to existing content, CREATE-NEW block,
 NAVIGATION for navigation style, EXPANDED to show block expanded
 by default."
   (when-let ((_ (map-elt state :buffer))
-             (compose-buffer (agent-shell-prompt-compose--buffer
+             (viewport-buffer (agent-shell-viewport--buffer
                               :shell-buffer (map-elt state :buffer)
                               :existing-only t)))
-    (with-current-buffer compose-buffer
+    (with-current-buffer viewport-buffer
       (let ((inhibit-read-only t))
         ;; TODO: Investigate why save-restriction isn't enough
         ;; to save point. Saving (point) for now.
@@ -2605,13 +2605,13 @@ If in a project, use project root."
        (error "No CWD available"))))
 
 (defun agent-shell--current-shell ()
-  "Current shell for compose buffer or shell buffer."
+  "Current shell for viewport or shell buffer."
   (cond ((derived-mode-p 'agent-shell-mode)
          (current-buffer))
-        ((or (derived-mode-p 'agent-shell-prompt-compose-view-mode)
-             (derived-mode-p 'agent-shell-prompt-compose-edit-mode))
+        ((or (derived-mode-p 'agent-shell-viewport-view-mode)
+             (derived-mode-p 'agent-shell-viewport-edit-mode))
          (seq-first (seq-filter (lambda (shell-buffer)
-                                  (equal (agent-shell-prompt-compose--buffer
+                                  (equal (agent-shell-viewport--buffer
                                           :shell-buffer shell-buffer
                                           :existing-only t)
                                          (current-buffer)))
@@ -2625,8 +2625,8 @@ If in a project, use project root."
 The command executes asynchronously.  When finished, the output is
 inserted into the shell buffer prompt."
   (interactive)
-  (unless (or (derived-mode-p 'agent-shell-prompt-compose-view-mode)
-              (derived-mode-p 'agent-shell-prompt-compose-edit-mode)
+  (unless (or (derived-mode-p 'agent-shell-viewport-view-mode)
+              (derived-mode-p 'agent-shell-viewport-edit-mode)
               (derived-mode-p 'agent-shell-mode))
     (user-error "Not in an `agent-shell' buffer"))
   (let* ((command (read-string "insert command output: "))
@@ -2636,9 +2636,9 @@ inserted into the shell buffer prompt."
                                (when (with-current-buffer shell-buffer
                                        (shell-maker-busy))
                                  (user-error "Busy, try later"))
-                               (if (or (derived-mode-p 'agent-shell-prompt-compose-view-mode)
-                                       (derived-mode-p 'agent-shell-prompt-compose-edit-mode))
-                                   (agent-shell-prompt-compose--buffer
+                               (if (or (derived-mode-p 'agent-shell-viewport-view-mode)
+                                       (derived-mode-p 'agent-shell-viewport-edit-mode))
+                                   (agent-shell-viewport--buffer
                                     :shell-buffer shell-buffer)
                                  shell-buffer)))
          (output-buffer (with-current-buffer (generate-new-buffer (format "*%s*" command))
@@ -3264,8 +3264,8 @@ SUBMIT, when non-nil, submits the shell buffer after insertion.
 
 NO-FOCUS, when non-nil, avoid focusing shell on insertion.
 
-When `agent-shell-prefer-compose-buffer' is non-nil, prefer inserting
-into the compose buffer instead of the shell buffer.  If no compose
+When `agent-shell-prefer-viewport-interaction' is non-nil, prefer inserting
+into the viewport compose buffer instead of the shell buffer.  If no compose
 buffer exists, one will be created.
 
 Returns an alist with insertion details or nil otherwise:
@@ -3273,8 +3273,8 @@ Returns an alist with insertion details or nil otherwise:
   ((:buffer . BUFFER)
    (:start . START)
    (:end . END))"
-  (if agent-shell-prefer-compose-buffer
-      (agent-shell-prompt-compose--show-buffer :text text :submit submit :no-focus no-focus)
+  (if agent-shell-prefer-viewport-interaction
+      (agent-shell-viewport--show-buffer :text text :submit submit :no-focus no-focus)
     (agent-shell--insert-to-shell-buffer :text text :submit submit :no-focus no-focus)))
 
 (cl-defun agent-shell-send-region ()
