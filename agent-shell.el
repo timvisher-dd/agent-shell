@@ -410,7 +410,7 @@ With prefix argument NEW-SHELL, force start a new shell."
   (interactive)
   (let ((shell-buffer (if agent-shell-prefer-compose-buffer
                           (agent-shell-prompt-compose--buffer)
-                        (agent-shell-prompt-compose--shell-buffer))))
+                        (agent-shell--current-shell))))
     (unless shell-buffer
       (user-error "No agent shell buffers available for current project"))
     (if-let ((window (get-buffer-window shell-buffer)))
@@ -480,6 +480,20 @@ Returns an empty string if no icon should be displayed."
                   (derived-mode-p 'agent-shell-mode)))
               (buffer-list)))
 
+(defun agent-shell-other-buffer ()
+  "Switch to other associated buffer (compose vs shell)."
+  (interactive)
+  (cond ((or (derived-mode-p 'agent-shell-prompt-compose-view-mode)
+             (derived-mode-p 'agent-shell-prompt-compose-edit-mode))
+         (switch-to-buffer (or (agent-shell--shell-buffer :no-create t)
+                               "No shell available")))
+        ((derived-mode-p 'agent-shell-mode)
+         (switch-to-buffer (or (agent-shell-prompt-compose--buffer
+                                :shell-buffer (current-buffer))
+                               "Not in a shell compose buffer")))
+        (t
+         (user-error "Not in an agent-shell buffer"))))
+
 (defun agent-shell-version ()
   "Show `agent-shell' mode version."
   (interactive)
@@ -534,7 +548,9 @@ When FORCE is non-nil, skip confirmation prompt."
   "C-<tab>" #'agent-shell-cycle-session-mode
   "C-c C-c" #'agent-shell-interrupt
   "C-c C-m" #'agent-shell-set-session-mode
-  "C-c C-v" #'agent-shell-set-session-model)
+  "C-c C-v" #'agent-shell-set-session-model
+  "o" #'agent-shell-other-buffer
+  "C-c C-o" #'agent-shell-other-buffer)
 
 (shell-maker-define-major-mode (agent-shell--make-shell-maker-config) agent-shell-mode-map)
 
@@ -3540,8 +3556,10 @@ Uses :eval so the mode updates automatically when state changes."
               (append mode-line-misc-info
                       '((:eval (agent-shell--mode-line-format))))))
 
-(defun agent-shell-cycle-session-mode ()
-  "Cycle through available session modes for the current `agent-shell' session."
+(defun agent-shell-cycle-session-mode (&optional on-success)
+  "Cycle through available session modes for the current `agent-shell' session.
+
+Optionally, get notified of completion with ON-SUCCESS function."
   (interactive)
   (unless (derived-mode-p 'agent-shell-mode)
     (user-error "Not in an agent-shell buffer"))
@@ -3572,12 +3590,16 @@ Uses :eval so the mode updates automatically when state changes."
                                next-mode-id
                                (map-nested-elt (agent-shell--state)
                                                '(:session :modes)))))
-                   (agent-shell--update-header-and-mode-line))
+                   (agent-shell--update-header-and-mode-line)
+                   (when on-success
+                     (funcall on-success)))
      :on-failure (lambda (error _raw-message)
                    (message "Failed to change session mode: %s" error)))))
 
-(defun agent-shell-set-session-mode ()
-  "Set session mode (if any available)."
+(defun agent-shell-set-session-mode (&optional on-success)
+  "Set session mode (if any available).
+
+Optionally, get notified of completion with ON-SUCCESS function."
   (interactive)
   (unless (derived-mode-p 'agent-shell-mode)
     (user-error "Not in an agent-shell buffer"))
@@ -3618,12 +3640,16 @@ Uses :eval so the mode updates automatically when state changes."
                                selected-mode-id
                                (map-nested-elt (agent-shell--state)
                                                '(:session :modes)))))
-                   (agent-shell--update-header-and-mode-line))
+                   (agent-shell--update-header-and-mode-line)
+                   (when on-success
+                     (funcall on-success)))
      :on-failure (lambda (error _raw-message)
                    (message "Failed to change session mode: %s" error)))))
 
-(defun agent-shell-set-session-model ()
-  "Set session model."
+(defun agent-shell-set-session-model (&optional on-success)
+  "Set session model.
+
+Optionally, get notified of completion with ON-SUCCESS function."
   (interactive)
   (unless (derived-mode-p 'agent-shell-mode)
     (user-error "Not in an agent-shell buffer"))
@@ -3679,7 +3705,9 @@ Uses :eval so the mode updates automatically when state changes."
                                                    (string= (map-elt model :model-id) selected-model-id))
                                                  (map-nested-elt (agent-shell--state) '(:session :models)))
                                        :name)))
-                   (agent-shell--update-header-and-mode-line))
+                   (agent-shell--update-header-and-mode-line)
+                   (when on-success
+                     (funcall on-success)))
      :on-failure (lambda (error _raw-message)
                    (message "Failed to change model: %s" error)))))
 

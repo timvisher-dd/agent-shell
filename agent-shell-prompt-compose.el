@@ -63,6 +63,7 @@
 TEXT is inserted into the compose buffer.
 SUBMIT, when non-nil, submits after insertion.
 NO-FOCUS, when non-nil, avoids focusing the compose buffer.
+SHELL-BUFFER, when non-nil, prefer this shell buffer.
 NEW-SHELL, create a new shell (no history).
 
 Returns an alist with insertion details or nil otherwise:
@@ -457,6 +458,50 @@ If START-AT-TOP is non-nil, position at point-min regardless of direction."
     (agent-shell-prompt-compose--update-header)
     next))
 
+(defun agent-shell-prompt-compose-set-session-model ()
+  "Set session model."
+  (interactive)
+  (let* ((shell-buffer (or (agent-shell--current-shell)
+                           (user-error "Not in an agent-shell buffer")))
+         (compose-buffer (agent-shell-prompt-compose--buffer
+                          :shell-buffer shell-buffer
+                          :existing-only t)))
+    (with-current-buffer shell-buffer
+      (agent-shell-set-session-model
+       (lambda ()
+         (with-current-buffer compose-buffer
+           (agent-shell-prompt-compose--update-header)))))))
+
+(defun agent-shell-prompt-compose-set-session-mode ()
+  "Set session mode."
+  (interactive)
+  (let* ((shell-buffer (or (agent-shell--current-shell)
+                           (user-error "Not in an agent-shell buffer")))
+         (compose-buffer (agent-shell-prompt-compose--buffer
+                          :shell-buffer shell-buffer
+                          :existing-only t)))
+    (with-current-buffer shell-buffer
+      (agent-shell-set-session-mode
+       (lambda ()
+         (when compose-buffer
+           (with-current-buffer compose-buffer
+             (agent-shell-prompt-compose--update-header))))))))
+
+(defun agent-shell-prompt-compose-cycle-session-mode ()
+  "Cycle through available session modes."
+  (interactive)
+  (let* ((shell-buffer (or (agent-shell--current-shell)
+                           (user-error "Not in an agent-shell buffer")))
+         (compose-buffer (agent-shell-prompt-compose--buffer
+                          :shell-buffer shell-buffer
+                          :existing-only t)))
+    (with-current-buffer shell-buffer
+      (agent-shell-cycle-session-mode
+       (lambda ()
+         (when compose-buffer
+           (with-current-buffer compose-buffer
+             (agent-shell-prompt-compose--update-header))))))))
+
 (defun agent-shell-prompt-compose--position ()
   "Return the position in history of the shell buffer."
   (unless (or (derived-mode-p 'agent-shell-prompt-compose-view-mode)
@@ -564,6 +609,10 @@ For example, offer to kill associated shell session."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") #'agent-shell-prompt-compose-send)
     (define-key map (kbd "C-c C-k") #'agent-shell-prompt-compose-cancel)
+    (define-key map (kbd "C-<tab>") #'agent-shell-prompt-compose-cycle-session-mode)
+    (define-key map (kbd "C-c C-m") #'agent-shell-prompt-compose-set-session-mode)
+    (define-key map (kbd "C-c C-v") #'agent-shell-prompt-compose-set-session-model)
+    (define-key map (kbd "C-c C-o") #'agent-shell-other-buffer)
     map)
   "Keymap for `agent-shell-prompt-compose-edit-mode'.")
 
@@ -587,6 +636,11 @@ For example, offer to kill associated shell session."
     (define-key map (kbd "b") #'agent-shell-prompt-compose-previous-interaction)
     (define-key map (kbd "r") #'agent-shell-prompt-compose-reply)
     (define-key map (kbd "q") #'bury-buffer)
+    (define-key map (kbd "C-<tab>") #'agent-shell-prompt-compose-cycle-session-mode)
+    (define-key map (kbd "v") #'agent-shell-prompt-compose-set-session-model)
+    (define-key map (kbd "m") #'agent-shell-prompt-compose-set-session-mode)
+    (define-key map (kbd "o") #'agent-shell-other-buffer)
+    (define-key map (kbd "C-c C-o") #'agent-shell-other-buffer)
     map)
   "Keymap for `agent-shell-prompt-compose-view-mode'.")
 
