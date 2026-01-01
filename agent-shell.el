@@ -560,26 +560,28 @@ When FORCE is non-nil, skip confirmation prompt."
   (interactive)
   (unless (derived-mode-p 'agent-shell-mode)
     (error "Not in a shell"))
-  (unless (map-nested-elt (agent-shell--state) '(:session :id))
-    (error "No active session"))
-  (when (or force (y-or-n-p "Interrupt?"))
-    ;; First cancel all pending permission requests
-    (map-do
-     (lambda (tool-call-id tool-call-data)
-       (when (map-elt tool-call-data :permission-request-id)
-         (agent-shell--send-permission-response
-          :client (map-elt (agent-shell--state) :client)
-          :request-id (map-elt tool-call-data :permission-request-id)
-          :cancelled t
-          :state (agent-shell--state)
-          :tool-call-id tool-call-id)))
-     (map-elt (agent-shell--state) :tool-calls))
-    ;; Then send the cancel notification
-    (acp-send-notification
-     :client (map-elt (agent-shell--state) :client)
-     :notification (acp-make-session-cancel-notification
-                    :session-id (map-nested-elt (agent-shell--state) '(:session :id))
-                    :reason "User cancelled"))))
+  (cond ((map-nested-elt (agent-shell--state) '(:session :id))
+         (when (or force (y-or-n-p "Interrupt?"))
+           ;; First cancel all pending permission requests
+           (map-do
+            (lambda (tool-call-id tool-call-data)
+              (when (map-elt tool-call-data :permission-request-id)
+                (agent-shell--send-permission-response
+                 :client (map-elt (agent-shell--state) :client)
+                 :request-id (map-elt tool-call-data :permission-request-id)
+                 :cancelled t
+                 :state (agent-shell--state)
+                 :tool-call-id tool-call-id)))
+            (map-elt (agent-shell--state) :tool-calls))
+           ;; Then send the cancel notification
+           (acp-send-notification
+            :client (map-elt (agent-shell--state) :client)
+            :notification (acp-make-session-cancel-notification
+                           :session-id (map-nested-elt (agent-shell--state) '(:session :id))
+                           :reason "User cancelled"))))
+        (t
+         (agent-shell--shutdown)
+         (call-interactively #'shell-maker-interrupt))))
 
 (cl-defun agent-shell--make-shell-maker-config (&key prompt prompt-regexp)
   "Create `shell-maker' configuration with PROMPT and PROMPT-REGEXP."
@@ -1343,16 +1345,27 @@ DIFF should be in the form returned by `agent-shell--make-diff-info':
 For example, shut down ACP client."
   (unless (derived-mode-p 'agent-shell-mode)
     (error "Not in a shell"))
-  (when (map-elt (agent-shell--state) :client)
-    (acp-shutdown :client (map-elt (agent-shell--state) :client)))
-  (agent-shell-heartbeat-stop
-   :heartbeat (map-elt (agent-shell--state) :heartbeat))
+  (agent-shell--shutdown)
   (when-let (((map-elt (agent-shell--state) :buffer))
              (viewport-buffer (agent-shell-viewport--buffer
                                :shell-buffer (map-elt (agent-shell--state) :buffer)
                                :existing-only t))
              (buffer-live-p viewport-buffer))
     (kill-buffer viewport-buffer)))
+
+(defun agent-shell--shutdown ()
+  "Shut down shell activity."
+  (unless (derived-mode-p 'agent-shell-mode)
+    (error "Not in a shell"))
+  (when (map-elt (agent-shell--state) :client)
+    (acp-shutdown :client (map-elt (agent-shell--state) :client))
+    (map-put! (agent-shell--state) :client nil)
+    (map-put! (agent-shell--state) :initialized nil)
+    (map-put! (agent-shell--state) :authenticated nil)
+    (map-put! (agent-shell--state) :set-model nil)
+    (map-put! (agent-shell--state) :set-session-mode nil))
+  (agent-shell-heartbeat-stop
+   :heartbeat (map-elt (agent-shell--state) :heartbeat)))
 
 (cl-defun agent-shell--capture-screenshot (&key destination-dir)
   "Capture a screenshot and save it to DESTINATION-DIR.
