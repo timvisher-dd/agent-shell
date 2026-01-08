@@ -101,6 +101,16 @@ uv tool install mistral-vibe
 
 See https://github.com/mistralai/mistral-vibe for details.
 
+*** Factory Droid
+
+For Factory Droid, install the =droid-acp= client:
+
+#+begin_src bash
+npm install -g droid-acp
+#+end_src
+
+See https://github.com/yaonyan/droid-acp for details.
+
 ** Installation
 
 =agent-shell= is powered by built-in =comint-shell=, via [[https://github.com/xenodium/shell-maker][shell-maker]], available on [[https://melpa.org/#/shell-maker][MELPA]].
@@ -335,6 +345,7 @@ Start a specific agent shell session directly:
 - =M-x agent-shell-cursor-start-agent= - Start a Cursor agent session
 - =M-x agent-shell-mistral-start-vibe= - Start a Mistral Vibe agent session
 - =M-x agent-shell-qwen-start= - Start a Qwen Code agent session
+- =M-x agent-shell-droid-start-agent= - Start a Factory Droid agent session
 
 *** Setting a default agent for all new shells
 

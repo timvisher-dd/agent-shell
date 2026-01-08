@@ -64,6 +64,7 @@
 (require 'agent-shell-qwen)
 (require 'agent-shell-heartbeat)
 (require 'agent-shell-viewport)
+(require 'agent-shell-droid)
 
 (declare-function projectile-current-project-files "projectile")
 (declare-function projectile-project-root "projectile")
@@ -279,6 +280,7 @@ Goose, Cursor, and others."
         (agent-shell-cursor-make-agent-config)
         (agent-shell-google-make-gemini-config)
         (agent-shell-goose-make-agent-config)
+        (agent-shell-droid-make-agent-config)
         (agent-shell-mistral-make-config)
         (agent-shell-openai-make-codex-config)
         (agent-shell-opencode-make-agent-config)
