@@ -58,6 +58,7 @@
 (require 'agent-shell-cursor)
 (require 'agent-shell-diff)
 (require 'agent-shell-google)
+(require 'agent-shell-github)
 (require 'agent-shell-goose)
 (require 'agent-shell-mistral)
 (require 'agent-shell-openai)
@@ -292,11 +293,12 @@ Returns an alist with all specified values."
 
 This function aggregates agents from OpenAI, Anthropic, Google,
 Goose, Cursor, Auggie, and others."
-  (list (agent-shell-anthropic-make-claude-code-config)
-        (agent-shell-auggie-make-agent-config)
+  (list (agent-shell-auggie-make-agent-config)
+        (agent-shell-anthropic-make-claude-code-config)
         (agent-shell-openai-make-codex-config)
         (agent-shell-cursor-make-agent-config)
         (agent-shell-droid-make-agent-config)
+        (agent-shell-github-make-copilot-config)
         (agent-shell-google-make-gemini-config)
         (agent-shell-goose-make-agent-config)
         (agent-shell-mistral-make-config)
