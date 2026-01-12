@@ -1,4 +1,4 @@
-;;; agent-shell.el --- Native agentic integrations for Claude Code, Gemini CLI, etc.  -*- lexical-binding: t; -*-
+;;; agent-shell.el --- Native agentic integrations for Claude Code, Gemini CLI, etc  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2024 Alvaro Ramirez
 
@@ -2809,6 +2809,10 @@ If in a project, use project root."
            (project-root proj)))
        default-directory
        (error "No CWD available"))))
+
+(defvar projectile-mode)
+(declare-function projectile-project-name "projectile")
+(declare-function projectile-project-root "projectile")
 
 (defun agent-shell--project-name ()
   "Return the project name for this shell.
