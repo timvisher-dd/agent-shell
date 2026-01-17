@@ -102,6 +102,14 @@ When non-nil, tool use sections are expanded."
   :type 'boolean
   :group 'agent-shell)
 
+(defcustom agent-shell-user-message-expand-by-default nil
+  "Whether user message sections should be expanded by default.
+
+When nil (the default), user message sections are collapsed.
+When non-nil, user message sections are expanded."
+  :type 'boolean
+  :group 'agent-shell)
+
 (defcustom agent-shell-show-config-icons t
   "Whether to show icons in agent config selection."
   :type 'boolean
@@ -805,6 +813,28 @@ Flow:
                   :append t
                   :navigation 'never))
                (map-put! state :last-entry-type "agent_message_chunk"))
+              ((equal (map-elt update 'sessionUpdate) "user_message_chunk")
+               (unless (equal (map-elt state :last-entry-type) "user_message_chunk")
+                 (map-put! state :chunked-group-count (1+ (map-elt state :chunked-group-count)))
+                 (agent-shell--append-transcript
+                  :text (format "## User (%s)\n\n" (format-time-string "%F %T"))
+                  :file-path agent-shell--transcript-file))
+               (let-alist update
+                 (agent-shell--append-transcript
+                  :text (format "> %s\n" .content.text)
+                  :file-path agent-shell--transcript-file)
+                 (agent-shell--update-fragment
+                  :state state
+                  :block-id (format "%s-user_message_chunk"
+                                    (map-elt state :chunked-group-count))
+                  :label-left (propertize "User" 'font-lock-face 'font-lock-doc-markup-face)
+                  :body .content.text
+                  :create-new (not (equal (map-elt state :last-entry-type)
+                                          "user_message_chunk"))
+                  :append t
+                  :expanded agent-shell-user-message-expand-by-default
+                  :navigation 'never))
+               (map-put! state :last-entry-type "user_message_chunk"))
               ((equal (map-elt update 'sessionUpdate) "plan")
                (let-alist update
                  (agent-shell--update-fragment
@@ -3703,17 +3733,18 @@ If CAP is non-nil, truncate at CAP."
 
 Context could be either a region or error at point or files.
 The sources checked are controlled by `agent-shell-context-sources'."
-  (seq-some
-   (lambda (source)
-     (pcase source
-       ('files (agent-shell--get-files-context
-                :files (agent-shell--buffer-files :obvious t)))
-       ('region (agent-shell--get-region-context
-                 :deactivate t :no-error t))
-       ('error (agent-shell--get-flymake-error-context))
-       ('line (agent-shell--get-current-line-context))
-       ((pred functionp) (funcall source))))
-   agent-shell-context-sources))
+  (unless (derived-mode-p 'agent-shell-mode)
+    (seq-some
+     (lambda (source)
+       (pcase source
+         ('files (agent-shell--get-files-context
+                  :files (agent-shell--buffer-files :obvious t)))
+         ('region (agent-shell--get-region-context
+                   :deactivate t :no-error t))
+         ('error (agent-shell--get-flymake-error-context))
+         ('line (agent-shell--get-current-line-context))
+         ((pred functionp) (funcall source))))
+     agent-shell-context-sources)))
 
 (cl-defun agent-shell--get-region (&key deactivate)
   "Get the active region as an alist.

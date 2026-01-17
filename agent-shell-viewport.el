@@ -433,7 +433,7 @@ With EXISTING-ONLY, only return existing buffers without creating."
 (defun agent-shell-viewport-reply ()
   "Reply as a follow-up and compose another prompt/query."
   (interactive)
-  (unless (derived-mode-p 'agent-shell-viewport-edit-mode)
+  (unless (derived-mode-p 'agent-shell-viewport-view-mode)
     (user-error "Not in a shell viewport buffer"))
   (when (agent-shell-viewport--busy-p)
     (user-error "Busy, please wait"))
