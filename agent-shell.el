@@ -3809,12 +3809,7 @@ Available values:
     (let ((start (region-beginning))
           (end (region-end))
           (content (buffer-substring-no-properties (region-beginning) (region-end)))
-          (language (cond ((listp mode-name)
-                           (downcase (car mode-name)))
-                          ((stringp mode-name)
-                           (downcase mode-name))
-                          (t
-                           "")))
+          (language (string-remove-suffix "-mode" (string-remove-suffix "-ts-mode" (symbol-name major-mode))))
           (file (when-let ((buffer-file-name (buffer-file-name)))
                   (file-relative-name buffer-file-name (agent-shell-cwd)))))
       (when deactivate
