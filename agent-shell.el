@@ -3109,7 +3109,8 @@ The captured screenshot file path is then inserted into the shell prompt."
 
 (defun agent-shell--completion-bounds (char-class trigger-char)
   "Find completion bounds for CHAR-CLASS, if TRIGGER-CHAR precedes them.
-Returns alist with :start and :end if TRIGGER-CHAR is found before the word, nil otherwise."
+Returns alist with :start and :end if TRIGGER-CHAR is found before
+the word, nil otherwise."
   (save-excursion
     (when-let* ((end (progn (skip-chars-forward char-class) (point)))
                 (start (progn (skip-chars-backward char-class) (point)))
