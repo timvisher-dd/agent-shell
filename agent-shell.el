@@ -3644,8 +3644,7 @@ When NO-ERROR is non-nil, return nil and continue without error."
          (processed-text (if (map-elt region :file)
                              (let ((file-link (agent-shell-ui-add-action-to-text
                                                (format "%s:%d-%d"
-                                                       (file-relative-name (map-elt region :file)
-                                                                           (agent-shell-cwd))
+                                                       (map-elt region :file)
                                                        (map-elt region :line-start)
                                                        (map-elt region :line-end))
                                                (lambda ()
