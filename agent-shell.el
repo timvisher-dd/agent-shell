@@ -3315,7 +3315,9 @@ MESSAGE-TEXT: Optional message to display after sending the response."
     (map-put! state :tool-calls updated-tool-calls))
   (when message-text
     (message "%s" message-text))
-  (goto-char (point-max)))
+  ;; Jump to any remaining permission buttons, or go to end of buffer.
+  (or (agent-shell-jump-to-latest-permission-button-row)
+      (goto-char (point-max))))
 
 (cl-defun agent-shell--resolve-permission-choice-to-action (&key choice actions)
   "Resolve `agent-shell-diff' CHOICE to permission action from ACTIONS.
@@ -3515,7 +3517,9 @@ Returns nil if the ACP-OPTION kind is not recognized."
                 'alist))))
 
 (defun agent-shell-jump-to-latest-permission-button-row ()
-  "Jump to the latest permission button row."
+  "Jump to the latest permission button row.
+
+Returns non-nil if a permission button was found, nil otherwise."
   (interactive)
   (when-let ((found (save-mark-and-excursion
                       (goto-char (point-max))
@@ -3525,7 +3529,8 @@ Returns nil if the ACP-OPTION kind is not recognized."
     (beginning-of-line)
     (agent-shell-next-permission-button)
     (when-let ((window (get-buffer-window (current-buffer))))
-      (set-window-point window (point)))))
+      (set-window-point window (point)))
+    t))
 
 (defun agent-shell-next-permission-button ()
   "Jump to the next button."
