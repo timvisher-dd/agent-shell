@@ -739,6 +739,20 @@ code block content with spaces
                      (headers . [((name . "Authorization") (value . "Bearer token"))
                                  ((name . "Content-Type") (value . "application/json"))]))])))
 
+  ;; Test empty list fields normalize to empty vectors
+  (let ((agent-shell-mcp-servers
+         '(((name . "empty")
+            (command . "npx")
+            (args . ())
+            (env . ())
+            (headers . ())))))
+    (should (equal (agent-shell--mcp-servers)
+                   [((name . "empty")
+                     (command . "npx")
+                     (args . [])
+                     (env . [])
+                     (headers . []))])))
+
   ;; Test with already-vectorized fields (should remain unchanged)
   (let ((agent-shell-mcp-servers
          '(((name . "filesystem")
@@ -756,11 +770,11 @@ code block content with spaces
          '(((name . "notion")
             (type . "http")
             (url . "https://mcp.notion.com/mcp")
-            (headers . []))
+            (headers . ()))
            ((name . "filesystem")
             (command . "npx")
             (args . ("-y" "@modelcontextprotocol/server-filesystem" "/tmp"))
-            (env . [])))))
+            (env . ())))))
     (should (equal (agent-shell--mcp-servers)
                    [((name . "notion")
                      (type . "http")
