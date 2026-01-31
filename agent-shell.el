@@ -2952,20 +2952,22 @@ If FILE-PATH is not an image, returns nil."
 (cl-defun agent-shell--shell-buffer (&key viewport-buffer no-error no-create)
   "Get an `agent-shell' buffer for the current project.
 
-When VIEWPORT-BUFFER is non-nil, return counterpart.
+Resolution order:
+1. If VIEWPORT-BUFFER is provided, derive shell buffer from its name.
+2. If inside of a viewport buffer, derive shell bufer from its name.
+3. If currently in an `agent-shell-mode' buffer, return it.
+4. Otherwise, return the first shell buffer in the current project.
+
 When NO-CREATE is nil (default), prompt to create a new shell if none exists.
 When NO-CREATE is non-nil, return existing shell or nil/error if none exists.
 When NO-ERROR is non-nil, return nil instead of raising an error.
 
 Returns a buffer object or nil."
-  (let ((shell-buffer (if viewport-buffer
-                          (seq-first (seq-filter (lambda (shell-buffer)
-                                                   (equal (agent-shell-viewport--buffer
-                                                           :shell-buffer shell-buffer
-                                                           :existing-only t)
-                                                          viewport-buffer))
-                                                 (agent-shell-buffers)))
-                        (seq-first (agent-shell-project-buffers)))))
+  (let ((shell-buffer (or (agent-shell-viewport--shell-buffer
+                           (or viewport-buffer (current-buffer)))
+                          (if (derived-mode-p 'agent-shell-mode)
+                              (current-buffer)
+                            (seq-first (agent-shell-project-buffers))))))
     (if shell-buffer
         shell-buffer
       (if no-create
