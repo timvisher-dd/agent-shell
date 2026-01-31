@@ -410,9 +410,9 @@ the current working directory (`agent-shell-cwd') .
 For example, you can set up an Emacs MCP using external `claude-code-ide'
 package. See documentation of that package for more configuration:
 
-  (require \='claude-code-ide-mcp-server)
   (setq agent-shell-mcp-servers
-        `((lambda ()
+        \='((lambda ()
+            (require \='claude-code-ide-mcp-server)
             (let* ((project-dir (agent-shell-cwd))
                    (session-id (format \"agent-shell-%s-%s\"
                                  (file-name-nondirectory
