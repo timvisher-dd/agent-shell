@@ -1837,7 +1837,7 @@ PROPERTIES should be a plist of property-value pairs."
         ('kebab-case
          (format "%s-agent @ %s"
                  (downcase (replace-regexp-in-string " " "-" agent-name))
-                 (downcase (replace-regexp-in-string " " "-" project-name))))
+                 project-name))
         ('default
          (format "%s Agent @ %s"
                  agent-name
