@@ -175,6 +175,14 @@ See https://github.com/xenodium/agent-shell/issues/119"
   :type 'boolean
   :group 'agent-shell)
 
+(defcustom agent-shell-show-usage-at-turn-end nil
+  "Whether to display usage information when agent turn ends.
+
+When non-nil, displays a formatted box showing token counts,
+context window usage, and cost information after each agent response."
+  :type 'boolean
+  :group 'agent-shell)
+
 (defcustom agent-shell-context-sources '(files region error line)
   "Sources to consider when determining \\<agent-shell-mode-map>\\[agent-shell] automatic context.
 
@@ -562,6 +570,28 @@ Extracts context window and cost information from usage_update notification."
    ((>= num 1000000) (format "%.0fm" (/ num 1000000.0)))
    ((>= num 1000) (format "%.0fk" (/ num 1000.0)))
    (t (format "%d" num))))
+
+(defun agent-shell--usage-has-data-p (usage)
+  "Return non-nil if USAGE contains meaningful data.
+Checks if any token counts or context size are non-zero."
+  (or (> (or (map-elt usage :total-tokens) 0) 0)
+      (> (or (map-elt usage :context-size) 0) 0)))
+
+(defun agent-shell--format-usage-box (usage)
+  "Format USAGE information as a box display.
+Returns a string with box-drawing characters showing tokens, context, and cost."
+  (let* ((content (agent-shell--format-usage usage))
+         (content-width (length content))
+         (title "Usage")
+         ;; Top line: "╭─ Usage " + dashes + "╮"
+         ;; Content line: "│ " + content + " │"
+         ;; Bottom line: "╰" + dashes + "╯"
+         ;; All lines should have the same total width
+         (inner-width content-width)  ; width between the borders
+         (top-line (concat "╭─ " title " " (make-string (- inner-width (length title) 1) ?─) "╮")))
+    (concat top-line "\n"
+            "│ " content " │\n"
+            "╰" (make-string (+ inner-width 2) ?─) "╯")))
 
 (defun agent-shell-show-usage ()
   "Display current session usage information in the minibuffer.
@@ -3157,6 +3187,15 @@ If FILE-PATH is not an image, returns nil."
                      (agent-shell--save-usage :state (agent-shell--state) :acp-usage (map-elt response 'usage)))
                    (let ((success (equal (map-elt response 'stopReason)
                                          "end_turn")))
+                     ;; Display usage box at end of turn if enabled and data available
+                     (when-let* (((and success
+                                       agent-shell-show-usage-at-turn-end
+                                       (agent-shell--usage-has-data-p (map-elt (agent-shell--state) :usage)))))
+                       (agent-shell--update-fragment
+                        :state (agent-shell--state)
+                        :block-id (format "%s-usage" (map-elt (agent-shell--state) :request-count))
+                        :body (agent-shell--format-usage-box (map-elt (agent-shell--state) :usage))
+                        :create-new t))
                      (unless success
                        (agent-shell--update-fragment
                         :state (agent-shell--state)
