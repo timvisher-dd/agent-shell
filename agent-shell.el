@@ -284,6 +284,15 @@ Can be one of:
   :type 'boolean
   :group 'agent-shell)
 
+(defcustom agent-shell-show-context-usage-indicator t
+  "Non-nil to show the context usage indicator in the header and mode line.
+
+The indicator displays context window usage as a vertical bar character,
+color-coded from green (low) to yellow (high) to red (critical).
+Only appears when the ACP server provides usage information."
+  :type 'boolean
+  :group 'agent-shell)
+
 (defcustom agent-shell-screenshot-command
   (if (eq system-type 'darwin)
       '("/usr/sbin/screencapture" "-i")
@@ -1216,6 +1225,8 @@ otherwise returns COMMAND unchanged."
               ((equal (map-elt update 'sessionUpdate) "usage_update")
                ;; Extract context window and cost information
                (agent-shell--update-usage-from-notification :state state :update update)
+               ;; Update header to reflect new context usage indicator
+               (agent-shell--update-header-and-mode-line)
                ;; Note: This is session-level state, no need to set :last-entry-type
                nil)
               (t
@@ -2354,6 +2365,7 @@ The model contains all inputs needed to render the graphical header."
       (:frame-width . ,(frame-pixel-width))
       (:font-height . ,(default-font-height))
       (:background-mode . ,(frame-parameter nil 'background-mode))
+      (:context-indicator . ,(agent-shell--context-usage-indicator))
       (:status-frame . ,(agent-shell--status-frame))
       (:qualifier . ,qualifier)
       (:bindings . ,bindings))))
@@ -2378,7 +2390,7 @@ BINDINGS is a list of alists defining key bindings to display, each with:
   (unless state
     (error "STATE is required"))
   (let* ((header-model (agent-shell--make-header-model state :qualifier qualifier :bindings bindings))
-         (text-header (format " %s%s%s @ %s%s"
+         (text-header (format " %s%s%s @ %s%s%s"
                               (propertize (concat (map-elt header-model :buffer-name) " Agent")
                                           'font-lock-face 'font-lock-variable-name-face)
                               (if (map-elt header-model :model-name)
@@ -2389,6 +2401,9 @@ BINDINGS is a list of alists defining key bindings to display, each with:
                                 "")
                               (propertize (string-remove-suffix "/" (abbreviate-file-name (map-elt header-model :directory)))
                                           'font-lock-face 'font-lock-string-face)
+                              (if (map-elt header-model :context-indicator)
+                                  (concat " " (map-elt header-model :context-indicator))
+                                "")
                               (if (map-elt header-model :status-frame)
                                   (map-elt header-model :status-frame)
                                 ""))))
@@ -2470,6 +2485,18 @@ BINDINGS is a list of alists defining key bindings to display, each with:
                                                                                    "#6699cc"))
                                                                       (dx . "8"))
                                                                     (map-elt header-model :mode-name))))
+                                      (when (map-elt header-model :context-indicator)
+                                        (let* (;; Extract the face from the propertized string
+                                               (face (get-text-property 0 'face (map-elt header-model :context-indicator)))
+                                               ;; Get the foreground color from the face
+                                               (color (if face
+                                                          (face-attribute face :foreground nil t)
+                                                        (face-attribute 'default :foreground))))
+                                          (dom-append-child text-node
+                                                            (dom-node 'tspan
+                                                                      `((fill . ,color)
+                                                                        (dx . "8"))
+                                                                      (substring-no-properties (map-elt header-model :context-indicator))))))
                                       (when (map-elt header-model :status-frame)
                                         (dom-append-child text-node
                                                           (dom-node 'tspan
@@ -4409,6 +4436,37 @@ See https://agentclientprotocol.com/protocol/session-modes for details."
                              available-session-modes)))
     (map-elt mode :name)))
 
+(defun agent-shell--context-usage-indicator ()
+  "Return a single character indicating context usage percentage.
+Uses Unicode vertical block characters to show fill level.
+Only returns an indicator if enabled and usage data is available."
+  (when-let* ((agent-shell-show-context-usage-indicator)
+              ((agent-shell--usage-has-data-p (map-elt (agent-shell--state) :usage)))
+              (usage (map-elt (agent-shell--state) :usage))
+              (context-used (map-elt usage :context-used))
+              (context-size (map-elt usage :context-size))
+              ((> context-size 0)))
+    (let* ((percentage (/ (* 100.0 context-used) context-size))
+           ;; Unicode vertical block characters from empty to full
+           (indicator (cond
+                       ((>= percentage 100) "█")  ; Full
+                       ((>= percentage 87.5) "▇")
+                       ((>= percentage 75) "▆")
+                       ((>= percentage 62.5) "▅")
+                       ((>= percentage 50) "▄")
+                       ((>= percentage 37.5) "▃")
+                       ((>= percentage 25) "▂")
+                       ((> percentage 0) "▁")
+                       (t nil)))  ; Return nil for no usage
+           (face (cond
+                  ((>= percentage 80) 'error)         ; Red for critical
+                  ((>= percentage 60) 'warning)       ; Yellow/orange for warning
+                  (t 'success))))                     ; Green for normal
+      (when indicator
+        (propertize indicator
+                    'face face
+                    'help-echo (agent-shell--format-usage usage))))))
+
 (defun agent-shell--status-frame ()
   "Return busy frame string or nil if not busy."
   (when (and agent-shell-show-busy-indicator
@@ -4446,6 +4504,8 @@ Shows \" [C]\" when running in a container."
               (propertize (format " [%s]" mode-name)
                           'face 'font-lock-type-face
                           'help-echo (format "Session Mode: %s" mode-name)))
+            (when-let ((indicator (agent-shell--context-usage-indicator)))
+              (concat " " indicator))
             (agent-shell--status-frame))))
 
 (defun agent-shell--setup-modeline ()
