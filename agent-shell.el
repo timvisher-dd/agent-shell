@@ -3108,9 +3108,9 @@ If FILE-PATH is not an image, returns nil."
                    (let ((success (equal (map-elt response 'stopReason)
                                          "end_turn")))
                      ;; Display usage box at end of turn if enabled and data available
-                     (when-let* (((and success
-                                       agent-shell-show-usage-at-turn-end
-                                       (agent-shell--usage-has-data-p (map-elt (agent-shell--state) :usage)))))
+                     (when (and success
+                                agent-shell-show-usage-at-turn-end
+                                (agent-shell--usage-has-data-p (map-elt (agent-shell--state) :usage)))
                        (agent-shell--update-fragment
                         :state (agent-shell--state)
                         :block-id (format "%s-usage" (map-elt (agent-shell--state) :request-count))
