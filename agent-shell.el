@@ -826,6 +826,7 @@ Flow:
               ;; TODO: Make public in shell-maker.
               (shell-maker--current-request-id))
     (cond ((not (map-elt (agent-shell--state) :client))
+           ;; Needs a client
            (when-let ((viewport-buffer (agent-shell-viewport--buffer
                                         :shell-buffer shell-buffer
                                         :existing-only t)))
@@ -836,17 +837,20 @@ Flow:
                 :response (agent-shell-viewport--response))))
            (when (agent-shell--initialize-client)
              (agent-shell--handle :command command :shell-buffer shell-buffer)))
+          ;; Needs ACP subscriptions
           ((or (not (map-nested-elt (agent-shell--state) '(:client :request-handlers)))
                (not (map-nested-elt (agent-shell--state) '(:client :notification-handlers)))
                (not (map-nested-elt (agent-shell--state) '(:client :error-handlers))))
            (when (agent-shell--initialize-subscriptions)
              (agent-shell--handle :command command :shell-buffer shell-buffer)))
+          ;; Needs to send ACP initialize request
           ((not (map-elt (agent-shell--state) :initialized))
            (agent-shell--initiate-handshake
             :shell-buffer shell-buffer
             :on-initiated (lambda ()
                             (map-put! (agent-shell--state) :initialized t)
                             (agent-shell--handle :command command :shell-buffer shell-buffer))))
+          ;; Needs to send ACP authenticate request (optional)
           ((and (map-elt (agent-shell--state) :needs-authentication)
                 (not (map-elt (agent-shell--state) :authenticated)))
            (agent-shell--authenticate
@@ -854,11 +858,29 @@ Flow:
             :on-authenticated (lambda ()
                                 (map-put! (agent-shell--state) :authenticated t)
                                 (agent-shell--handle :command command :shell-buffer shell-buffer))))
+          ;; Needs to send ACP new session request
           ((not (map-nested-elt (agent-shell--state) '(:session :id)))
            (agent-shell--initiate-session
             :shell-buffer shell-buffer
             :on-session-init (lambda ()
+                               ;; Session is now initiated.
+                               ;; Consider bootstrapping/handshake complete.
+                               ;; Show shell prompt.
+                               (unless command
+                                 (when (seq-empty-p (map-elt (agent-shell--state) :available-commands))
+                                   ;; Setting an "available commands" placeholder fragment before
+                                   ;; displaying the prompt (shell-maker-finish-output).
+                                   ;; This enables updating the placeholder even if the notification
+                                   ;; arrives after bootstrapping prompt is displayed.
+                                   (agent-shell--update-fragment
+                                    :state (agent-shell--state)
+                                    :namespace-id "bootstrapping"
+                                    :block-id "available_commands_update"
+                                    :label-left (propertize "Available commands" 'font-lock-face 'font-lock-doc-markup-face)))
+                                 (shell-maker-finish-output :config shell-maker--config
+                                                            :success nil))
                                (agent-shell--handle :command command :shell-buffer shell-buffer))))
+          ;; Send ACP request to set default model (optional)
           ((and (map-nested-elt (agent-shell--state) '(:agent-config :default-model-id))
                 (funcall (map-nested-elt (agent-shell--state)
                                          '(:agent-config :default-model-id)))
@@ -870,6 +892,7 @@ Flow:
             :on-model-changed (lambda ()
                                 (map-put! (agent-shell--state) :set-model t)
                                 (agent-shell--handle :command command :shell-buffer shell-buffer))))
+          ;; Send ACP request to set default session mode (optional)
           ((and (map-nested-elt (agent-shell--state) '(:agent-config :default-session-mode-id))
                 (funcall (map-nested-elt (agent-shell--state) '(:agent-config :default-session-mode-id)))
                 (not (map-elt (agent-shell--state) :set-session-mode)))
@@ -879,7 +902,8 @@ Flow:
             :on-mode-changed (lambda ()
                                (map-put! (agent-shell--state) :set-session-mode t)
                                (agent-shell--handle :command command :shell-buffer shell-buffer))))
-          (t
+          ;; Send ACP prompt request
+          ((and command (not (string-empty-p (string-trim command))))
            (agent-shell--send-command :prompt command :shell-buffer shell-buffer)))))
 
 (cl-defun agent-shell--on-error (&key state error)
@@ -1104,6 +1128,7 @@ otherwise returns COMMAND unchanged."
                  (map-put! state :available-commands (map-elt update 'availableCommands))
                  (agent-shell--update-fragment
                   :state state
+                  :namespace-id "bootstrapping"
                   :block-id "available_commands_update"
                   :label-left (propertize "Available commands" 'font-lock-face 'font-lock-doc-markup-face)
                   :body (agent-shell--format-available-commands (map-elt update 'availableCommands))))
@@ -1990,9 +2015,12 @@ variable (see makunbound)"))
          :config shell-maker--config
          :output (funcall (map-elt config :welcome-function)
                           shell-maker--config)))
-      (shell-maker-finish-output
-       :config shell-maker--config
-       :success nil))
+      ;; Kick off ACP bootstrapping.
+      (agent-shell--handle :shell-buffer shell-buffer)
+      ;; (shell-maker-finish-output
+      ;;  :config shell-maker--config
+       ;; :success nil)
+      )
     ;; Display buffer if no-focus was nil, respecting agent-shell-display-action
     (unless no-focus
       (agent-shell--display-buffer shell-buffer))
@@ -2013,10 +2041,13 @@ variable (see makunbound)"))
       (error "Editing the wrong buffer: %s" (current-buffer)))
     (agent-shell-ui-delete-fragment :namespace-id (map-elt state :request-count) :block-id block-id :no-undo t)))
 
-(cl-defun agent-shell--update-fragment (&key state block-id label-left label-right body append create-new navigation expanded)
+(cl-defun agent-shell--update-fragment (&key state namespace-id block-id label-left label-right
+                                             body append create-new navigation expanded)
   "Update fragment in the shell buffer.
 
-Creates or updates existing dialog using STATE's request count as namespace.
+Creates or updates existing dialog using STATE's request count as namespace
+unless NAMESPACE-ID (rarely needed).  Rely on count is possible.
+
 BLOCK-ID uniquely identifies the block.
 
 Dialog can have LABEL-LEFT, LABEL-RIGHT, and BODY.
@@ -2035,7 +2066,8 @@ by default."
         (when-let* ((saved-point (point))
                     (range (agent-shell-ui-update-fragment
                             (agent-shell-ui-make-fragment-model
-                             :namespace-id (map-elt state :request-count)
+                             :namespace-id (or namespace-id
+                                               (map-elt state :request-count))
                              :block-id block-id
                              :label-left label-left
                              :label-right label-right
@@ -2076,7 +2108,8 @@ by default."
     (shell-maker-with-auto-scroll-edit
      (when-let* ((range (agent-shell-ui-update-fragment
                          (agent-shell-ui-make-fragment-model
-                          :namespace-id (map-elt state :request-count)
+                          :namespace-id (or namespace-id
+                                            (map-elt state :request-count))
                           :block-id block-id
                           :label-left label-left
                           :label-right label-right
@@ -2718,6 +2751,7 @@ Must provide ON-INITIATED (lambda ())."
                    (when-let ((agent-capabilities (map-elt response 'agentCapabilities)))
                      (agent-shell--update-fragment
                       :state agent-shell--state
+                      :namespace-id "bootstrapping"
                       :block-id "agent_capabilities"
                       :label-left (propertize "Agent capabilities" 'font-lock-face 'font-lock-doc-markup-face)
                       :body (agent-shell--format-agent-capabilities agent-capabilities))))
@@ -2851,11 +2885,13 @@ Must provide ON-SESSION-INIT (lambda ())."
                                       (agent-shell--status-label "completed")
                                       (propertize "Starting agent" 'font-lock-face 'font-lock-doc-markup-face))
                   :body "\n\nReady"
+                  :namespace-id "bootstrapping"
                   :append t)
                  (agent-shell--update-header-and-mode-line)
                  (when (map-nested-elt agent-shell--state '(:session :models))
                    (agent-shell--update-fragment
                     :state agent-shell--state
+                    :namespace-id "bootstrapping"
                     :block-id "available_models"
                     :label-left (propertize "Available models" 'font-lock-face 'font-lock-doc-markup-face)
                     :body (agent-shell--format-available-models
@@ -2863,6 +2899,7 @@ Must provide ON-SESSION-INIT (lambda ())."
                  (when (agent-shell--get-available-modes agent-shell--state)
                    (agent-shell--update-fragment
                     :state agent-shell--state
+                    :namespace-id "bootstrapping"
                     :block-id "available_modes"
                     :label-left (propertize "Available modes" 'font-lock-face 'font-lock-doc-markup-face)
                     :body (agent-shell--format-available-modes
@@ -3164,7 +3201,7 @@ If FILE-PATH is not an image, returns nil."
                      (unless success
                        (agent-shell--display-pending-requests))
                      (shell-maker-finish-output :config shell-maker--config
-                                               :success t)
+                                                :success t)
                      ;; Update viewport header (longer busy)
                      (when-let ((viewport-buffer (agent-shell-viewport--buffer
                                                   :shell-buffer shell-buffer
