@@ -217,20 +217,6 @@ See `acp-make-initialize-request' for details."
   :type 'boolean
   :group 'agent-shell)
 
-(defconst agent-shell-terminal-capability t
-  "Whether agents are initialized with terminal command capability.
-
-This is intrinsic to the protocol support and is not intended to be
-customized. See `acp-make-initialize-request' for details.")
-
-(defconst agent-shell-client-capabilities-meta
-  '((terminal_output . t)
-    (terminal-auth . t))
-  "Extra client capabilities to send under \"_meta\" during initialization.
-
-This is intrinsic to the protocol support and is not intended to be
-customized. See `acp-make-initialize-request' for details.")
-
 (defcustom agent-shell-write-inhibit-minor-modes '(aggressive-indent-mode)
   "List of minor mode commands to inhibit during `fs/write_text_file' edits.
 
@@ -3472,8 +3458,9 @@ Must provide ON-INITIATED (lambda ())."
                             (version . ,agent-shell--version))
              :read-text-file-capability agent-shell-text-file-capabilities
              :write-text-file-capability agent-shell-text-file-capabilities
-             :terminal-capability agent-shell-terminal-capability
-             :meta-capabilities agent-shell-client-capabilities-meta)
+             :terminal-capability t
+             :meta-capabilities '((terminal_output . t)
+                                  (terminal-auth . t)))
    :on-success (lambda (response)
                  (with-current-buffer shell-buffer
                    (let ((acp-session-capabilities (or (map-elt response 'sessionCapabilities)
