@@ -445,13 +445,14 @@ configuration alist for backwards compatibility."
   :group 'agent-shell)
 
 (defcustom agent-shell-session-load-strategy 'latest
-  "How to choose an existing session when `session/list' and `session/load' are available.
+  "How to choose an existing session when both
+`session/list' and `session/load' are available.
 
 Available values:
 
-  `latest': Load the latest session returned by `session/list'.
-  `prompt': Prompt to choose which session to load (or start a new one).
-  `new': Always start a new session and skip `session/list' and `session/load'."
+  `latest': Load the latest session from `session/list'.
+  `prompt': Prompt to choose a session (or start new).
+  `new': Always start a new session, skip list/load."
   :type '(choice (const :tag "Load latest session" latest)
                  (const :tag "Prompt for session" prompt)
                  (const :tag "Always start new session" new))
