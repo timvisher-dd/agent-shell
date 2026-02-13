@@ -1126,6 +1126,10 @@ otherwise returns COMMAND unchanged."
 
 (defun agent-shell--terminal-remove (state terminal-id)
   "Remove TERMINAL-ID from STATE."
+  (when-let ((terminal (agent-shell--terminal-get state terminal-id)))
+    (when-let ((buffer (agent-shell--terminal-output-buffer terminal)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))))
   (map-put! state :terminals
             (map-delete (map-elt state :terminals) terminal-id)))
 
@@ -1162,39 +1166,70 @@ otherwise returns COMMAND unchanged."
      (t
       (append (list command) args)))))
 
-(defun agent-shell--terminal-truncate-output (output limit)
-  "Truncate OUTPUT to LIMIT bytes, returning (OUTPUT . TRUNCATED).
+(defun agent-shell--terminal-make-output-buffer (terminal-id)
+  "Create an output buffer for TERMINAL-ID."
+  (let ((buffer (generate-new-buffer (format " *agent-shell-terminal-output %s*" terminal-id))))
+    (with-current-buffer buffer
+      (setq buffer-undo-list t))
+    buffer))
 
-When LIMIT is set, keep the most recent bytes so the terminal/output
-response stays within the requested bound."
-  (cond
-   ((not (and limit (numberp limit))) (cons output nil))
-   ((<= limit 0) (cons "" t))
-   ((<= (string-bytes output) limit) (cons output nil))
-   (t
-    (let ((excess (- (string-bytes output) limit))
-          (index 0)
-          (length (length output)))
-      (while (and (< index length) (> excess 0))
-        (let ((char-bytes (string-bytes (string (aref output index)))))
-          (setq excess (- excess char-bytes))
-          (setq index (1+ index))))
-      (cons (substring output index) t)))))
+(defun agent-shell--terminal-output-buffer (terminal)
+  "Return live output buffer for TERMINAL."
+  (let ((buffer (map-elt terminal :output-buffer)))
+    (cond
+     ((buffer-live-p buffer) buffer)
+     ((when-let ((proc (map-elt terminal :process)))
+        (let ((proc-buffer (process-buffer proc)))
+          (when (buffer-live-p proc-buffer)
+            proc-buffer)))))))
 
-;; Store terminal output in state rather than a buffer. The only consumer
-;; is terminal/output, so a string avoids buffer overhead and keeps output
-;; byte limiting straightforward.
+(defun agent-shell--terminal-output-text (terminal)
+  "Return terminal output text for TERMINAL."
+  (when-let ((buffer (agent-shell--terminal-output-buffer terminal)))
+    (with-current-buffer buffer
+      (buffer-substring-no-properties (point-min) (point-max)))))
+
+(defun agent-shell--terminal-truncate-output (buffer limit)
+  "Truncate BUFFER to LIMIT bytes, returning non-nil when truncated."
+  (when (and (buffer-live-p buffer) (numberp limit))
+    (with-current-buffer buffer
+      (let* ((min-bytes (position-bytes (point-min)))
+             (max-bytes (position-bytes (point-max)))
+             (bytes (- max-bytes min-bytes)))
+        (cond
+         ((<= limit 0)
+          (when (> bytes 0)
+            (erase-buffer))
+          t)
+         ((> bytes limit)
+          (let* ((excess (- bytes limit))
+                 (cutoff-byte (+ min-bytes excess))
+                 (cutoff-pos (byte-to-position cutoff-byte)))
+            (delete-region (point-min) cutoff-pos)
+            t))
+         (t nil))))))
+
 (defun agent-shell--terminal-append-output (state terminal-id chunk)
   "Append CHUNK to TERMINAL-ID output stored in STATE."
   (when (and chunk (not (string-empty-p chunk)))
     (when-let ((terminal (agent-shell--terminal-get state terminal-id)))
-      (let* ((existing (or (map-elt terminal :output) ""))
+      (let* ((buffer (agent-shell--terminal-output-buffer terminal))
              (limit (map-elt terminal :output-byte-limit))
-             (combined (concat existing chunk))
              (truncated (map-elt terminal :truncated))
-             (trim-result (agent-shell--terminal-truncate-output combined limit)))
-        (setf (map-elt terminal :output) (car trim-result))
-        (setf (map-elt terminal :truncated) (or truncated (cdr trim-result)))
+             (trimmed nil))
+        (when buffer
+          (with-current-buffer buffer
+            (let ((inhibit-read-only t))
+              (if (and (numberp limit) (<= limit 0))
+                  (progn
+                    (unless (zerop (buffer-size))
+                      (erase-buffer))
+                    (setq trimmed t))
+                (goto-char (point-max))
+                (insert chunk)
+                (when (and (numberp limit) (> limit 0))
+                  (setq trimmed (agent-shell--terminal-truncate-output buffer limit)))))))
+        (setf (map-elt terminal :truncated) (or truncated trimmed))
         (agent-shell--terminal-put state terminal-id terminal)))))
 
 (defun agent-shell--terminal-exit-status (terminal)
@@ -1576,6 +1611,7 @@ response stays within the requested bound."
           (unless (stringp command)
             (error "terminal/create missing command"))
           (let* ((terminal-id (agent-shell--terminal-next-id state))
+                 (output-buffer (agent-shell--terminal-make-output-buffer terminal-id))
                  (default-directory (file-name-as-directory
                                      (expand-file-name
                                       (or (and cwd (agent-shell--resolve-path cwd))
@@ -1587,7 +1623,7 @@ response stays within the requested bound."
                                         process-environment))
                  (terminal `((:id . ,terminal-id)
                              (:process . nil)
-                             (:output . "")
+                             (:output-buffer . ,output-buffer)
                              (:truncated . nil)
                              (:output-byte-limit . ,output-byte-limit)
                              (:waiters . nil)
@@ -1597,7 +1633,7 @@ response stays within the requested bound."
                            (error "terminal/create cwd not found: %s" default-directory))
                          (make-process
                           :name (format "agent-shell-terminal-%s" terminal-id)
-                          :buffer nil
+                          :buffer output-buffer
                           :command command-list
                           :noquery t
                           :filter (lambda (_proc chunk)
@@ -1652,7 +1688,7 @@ response stays within the requested bound."
     (let* ((terminal-id (agent-shell--meta-lookup .params 'terminalId))
            (terminal (and terminal-id (agent-shell--terminal-get state terminal-id))))
       (if (and terminal (not (map-elt terminal :released)))
-          (let* ((output (or (map-elt terminal :output) ""))
+          (let* ((output (or (agent-shell--terminal-output-text terminal) ""))
                  (truncated (if (map-elt terminal :truncated) t :false))
                  (exit-status (agent-shell--terminal-exit-status terminal)))
             (acp-send-response
