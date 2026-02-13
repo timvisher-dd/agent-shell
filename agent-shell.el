@@ -217,6 +217,22 @@ See `acp-make-initialize-request' for details."
   :type 'boolean
   :group 'agent-shell)
 
+(defcustom agent-shell-terminal-capability t
+  "Whether agents are initialized with terminal command capability.
+
+See `acp-make-initialize-request' for details."
+  :type 'boolean
+  :group 'agent-shell)
+
+(defcustom agent-shell-client-capabilities-meta
+  '((terminal_output . t)
+    (terminal-auth . t))
+  "Extra client capabilities to send under \"_meta\" during initialization.
+
+See `acp-make-initialize-request' for details."
+  :type '(alist :key-type symbol :value-type sexp)
+  :group 'agent-shell)
+
 (defcustom agent-shell-write-inhibit-minor-modes '(aggressive-indent-mode)
   "List of minor mode commands to inhibit during `fs/write_text_file' edits.
 
@@ -570,6 +586,8 @@ HEARTBEAT, and AUTHENTICATE-REQUEST-MAKER."
         (cons :chunked-group-count 0)
         (cons :request-count 0)
         (cons :tool-calls nil)
+        (cons :terminals nil)
+        (cons :terminal-count 0)
         (cons :available-commands nil)
         (cons :available-modes nil)
         (cons :supports-session-list nil)
@@ -1068,6 +1086,158 @@ otherwise returns COMMAND unchanged."
     ((pred listp) (append agent-shell-container-command-runner command))
     (_ command)))
 
+(defun agent-shell--tool-call-content-text (content)
+  "Return concatenated text from tool call CONTENT items."
+  (let* ((items (cond
+                 ((vectorp content) (append content nil))
+                 ((listp content) content)
+                 (content (list content))
+                 (t nil)))
+         (parts (delq nil
+                      (mapcar (lambda (item)
+                                (let-alist item
+                                  (when (and (stringp .content.text)
+                                             (not (string-empty-p .content.text)))
+                                    .content.text)))
+                              items))))
+    (when parts
+      (mapconcat #'identity parts "\n\n"))))
+
+(defun agent-shell--meta-lookup (meta key)
+  "Lookup KEY in META, handling symbol or string keys."
+  (let ((value (map-elt meta key)))
+    (if (and (null value) (symbolp key))
+        (map-elt meta (symbol-name key))
+      value)))
+
+(defun agent-shell--tool-call-terminal-output-data (update)
+  "Return terminal output data string from UPDATE meta, if present."
+  (let* ((meta (or (map-elt update '_meta)
+                   (map-elt update 'meta)))
+         (terminal (and meta
+                        (or (agent-shell--meta-lookup meta 'terminal_output)
+                            (agent-shell--meta-lookup meta 'terminal-output)))))
+    (when terminal
+      (let ((data (or (agent-shell--meta-lookup terminal 'data)
+                      (agent-shell--meta-lookup terminal "data"))))
+        (when (stringp data)
+          data)))))
+
+(defun agent-shell--terminal-next-id (state)
+  "Return a new terminal ID and increment STATE counter."
+  (let* ((count (1+ (or (map-elt state :terminal-count) 0)))
+         (terminal-id (format "term_%d" count)))
+    (map-put! state :terminal-count count)
+    terminal-id))
+
+(defun agent-shell--terminal-get (state terminal-id)
+  "Return terminal entry for TERMINAL-ID."
+  (map-nested-elt state `(:terminals ,terminal-id)))
+
+(defun agent-shell--terminal-put (state terminal-id terminal)
+  "Store TERMINAL entry in STATE under TERMINAL-ID."
+  (let ((terminals (copy-alist (map-elt state :terminals))))
+    (setf (map-elt terminals terminal-id) terminal)
+    (map-put! state :terminals terminals)))
+
+(defun agent-shell--terminal-remove (state terminal-id)
+  "Remove TERMINAL-ID from STATE."
+  (map-put! state :terminals
+            (map-delete (map-elt state :terminals) terminal-id)))
+
+(defun agent-shell--terminal-normalize-args (args)
+  "Normalize ARGS to a list of strings."
+  (cond
+   ((vectorp args) (append args nil))
+   ((listp args) args)
+   (t nil)))
+
+(defun agent-shell--terminal-normalize-env (env)
+  "Normalize ENV to a list of "NAME=VALUE" strings."
+  (let ((entries (cond
+                  ((vectorp env) (append env nil))
+                  ((listp env) env)
+                  (t nil))))
+    (delq nil
+          (mapcar (lambda (entry)
+                    (let ((name (agent-shell--meta-lookup entry 'name))
+                          (value (agent-shell--meta-lookup entry 'value)))
+                      (when (stringp name)
+                        (format "%s=%s" name (or value "")))))
+                  entries))))
+
+(defun agent-shell--terminal-command-list (command args)
+  "Return command list for terminal/create from COMMAND and ARGS."
+  (let ((args (or args nil)))
+    (cond
+     ((and (stringp command)
+           (or args (file-executable-p command)))
+      (append (list command) args))
+     ((stringp command)
+      (list shell-file-name (or shell-command-switch "-c") command))
+     (t
+      (append (list command) args)))))
+
+(defun agent-shell--terminal-truncate-output (output limit)
+  "Truncate OUTPUT to LIMIT bytes, returning (OUTPUT . TRUNCATED)."
+  (cond
+   ((not (and limit (numberp limit))) (cons output nil))
+   ((<= limit 0) (cons "" t))
+   ((<= (string-bytes output) limit) (cons output nil))
+   (t
+    (let ((excess (- (string-bytes output) limit))
+          (index 0)
+          (length (length output)))
+      (while (and (< index length) (> excess 0))
+        (let ((char-bytes (string-bytes (string (aref output index)))))
+          (setq excess (- excess char-bytes))
+          (setq index (1+ index))))
+      (cons (substring output index) t)))))
+
+(defun agent-shell--terminal-append-output (state terminal-id chunk)
+  "Append CHUNK to TERMINAL-ID output stored in STATE."
+  (when (and chunk (not (string-empty-p chunk)))
+    (when-let ((terminal (agent-shell--terminal-get state terminal-id)))
+      (let* ((existing (or (map-elt terminal :output) ""))
+             (limit (map-elt terminal :output-byte-limit))
+             (combined (concat existing chunk))
+             (truncated (map-elt terminal :truncated))
+             (trim-result (agent-shell--terminal-truncate-output combined limit)))
+        (setf (map-elt terminal :output) (car trim-result))
+        (setf (map-elt terminal :truncated) (or truncated (cdr trim-result)))
+        (agent-shell--terminal-put state terminal-id terminal)))))
+
+(defun agent-shell--terminal-exit-status (terminal)
+  "Return exit status alist for TERMINAL entry."
+  (let ((exit-code (map-elt terminal :exit-code))
+        (signal (map-elt terminal :signal)))
+    (delq nil
+          (list (when (numberp exit-code)
+                  (cons 'exitCode exit-code))
+                (when (stringp signal)
+                  (cons 'signal signal))))))
+
+(defun agent-shell--terminal-respond-waiters (state terminal-id)
+  "Respond to any pending waiters for TERMINAL-ID."
+  (when-let ((terminal (agent-shell--terminal-get state terminal-id)))
+    (let ((waiters (map-elt terminal :waiters)))
+      (when waiters
+        (let ((result (agent-shell--terminal-exit-status terminal)))
+          (dolist (request-id waiters)
+            (acp-send-response
+             :client (map-elt state :client)
+             :response `((:request-id . ,request-id)
+                         (:result . ,result)))))
+        (setf (map-elt terminal :waiters) nil)
+        (agent-shell--terminal-put state terminal-id terminal)))))
+
+(defun agent-shell--terminal-finalize (state terminal-id)
+  "Finalize TERMINAL-ID after exit when released."
+  (when-let ((terminal (agent-shell--terminal-get state terminal-id)))
+    (agent-shell--terminal-respond-waiters state terminal-id)
+    (when (map-elt terminal :released)
+      (agent-shell--terminal-remove state terminal-id))))
+
 (cl-defun agent-shell--on-notification (&key state notification)
   "Handle incoming notification using SHELL, STATE, and NOTIFICATION."
   (let-alist notification
@@ -1216,16 +1386,13 @@ otherwise returns COMMAND unchanged."
                   :data (list (cons :tool-call-id .toolCallId)
                               (cons :tool-call (map-nested-elt state (list :tool-calls .toolCallId)))))
                  (let* ((diff (map-nested-elt state `(:tool-calls ,.toolCallId :diff)))
-                        (output (concat
-                                 "\n\n"
-                                 ;; TODO: Consider if there are other
-                                 ;; types of content to display.
-                                 (mapconcat (lambda (item)
-                                              (let-alist item
-                                                .content.text))
-                                            .content
-                                            "\n\n")
-                                 "\n\n"))
+                        (terminal-data (agent-shell--tool-call-terminal-output-data update))
+                        (content-text (or terminal-data
+                                          (agent-shell--tool-call-content-text .content)
+                                          ""))
+                        (output (if (string-empty-p content-text)
+                                    ""
+                                  (concat "\n\n" content-text "\n\n")))
                         (diff-text (agent-shell--format-diff-as-text diff))
                         (body-text (if diff-text
                                        (concat output
@@ -1372,6 +1539,26 @@ otherwise returns COMMAND unchanged."
            (agent-shell--on-fs-write-text-file-request
             :state state
             :request request))
+          ((equal .method "terminal/create")
+           (agent-shell--on-terminal-create-request
+            :state state
+            :request request))
+          ((equal .method "terminal/output")
+           (agent-shell--on-terminal-output-request
+            :state state
+            :request request))
+          ((equal .method "terminal/wait_for_exit")
+           (agent-shell--on-terminal-wait-for-exit-request
+            :state state
+            :request request))
+          ((equal .method "terminal/kill")
+           (agent-shell--on-terminal-kill-request
+            :state state
+            :request request))
+          ((equal .method "terminal/release")
+           (agent-shell--on-terminal-release-request
+            :state state
+            :request request))
           (t
            (agent-shell--update-fragment
             :state state
@@ -1380,6 +1567,184 @@ otherwise returns COMMAND unchanged."
             :create-new t
             :navigation 'never)
            (map-put! state :last-entry-type nil)))))
+
+(cl-defun agent-shell--on-terminal-create-request (&key state request)
+  "Handle terminal/create REQUEST with STATE."
+  (let-alist request
+    (condition-case err
+        (let* ((params .params)
+               (command (agent-shell--meta-lookup params 'command))
+               (args (agent-shell--terminal-normalize-args
+                      (agent-shell--meta-lookup params 'args)))
+               (env (agent-shell--terminal-normalize-env
+                     (agent-shell--meta-lookup params 'env)))
+               (cwd (agent-shell--meta-lookup params 'cwd))
+               (output-byte-limit (let ((limit (agent-shell--meta-lookup params 'outputByteLimit)))
+                                    (when (numberp limit) limit))))
+          (unless (stringp command)
+            (error "terminal/create missing command"))
+          (let* ((terminal-id (agent-shell--terminal-next-id state))
+                 (default-directory (file-name-as-directory
+                                     (expand-file-name
+                                      (or (and cwd (agent-shell--resolve-path cwd))
+                                          (agent-shell-cwd)))))
+                 (command-list (agent-shell--build-command-for-execution
+                                (agent-shell--terminal-command-list command args)))
+                 (process-environment (if env
+                                          (append env process-environment)
+                                        process-environment))
+                 (terminal `((:id . ,terminal-id)
+                             (:process . nil)
+                             (:output . "")
+                             (:truncated . nil)
+                             (:output-byte-limit . ,output-byte-limit)
+                             (:waiters . nil)
+                             (:released . nil)))
+                 (proc (progn
+                         (unless (file-directory-p default-directory)
+                           (error "terminal/create cwd not found: %s" default-directory))
+                         (make-process
+                          :name (format "agent-shell-terminal-%s" terminal-id)
+                          :buffer nil
+                          :command command-list
+                          :noquery t
+                          :filter (lambda (_proc chunk)
+                                    (agent-shell--terminal-append-output state terminal-id chunk))
+                          :sentinel (lambda (proc _event)
+                                      (let ((status (process-status proc)))
+                                        (when (memq status '(exit signal))
+                                          (when-let ((entry (agent-shell--terminal-get state terminal-id)))
+                                            (setf (map-elt entry :exit-code)
+                                                  (when (eq status 'exit)
+                                                    (process-exit-status proc)))
+                                            (setf (map-elt entry :signal)
+                                                  (when (eq status 'signal)
+                                                    (number-to-string (process-exit-status proc))))
+                                            (agent-shell--terminal-put state terminal-id entry)
+                                            (agent-shell--terminal-finalize state terminal-id)))))))))
+            (setf (map-elt terminal :process) proc)
+            (agent-shell--terminal-put state terminal-id terminal)
+            (let ((status (process-status proc)))
+              (when (memq status '(exit signal))
+                (when-let ((entry (agent-shell--terminal-get state terminal-id)))
+                  (setf (map-elt entry :exit-code)
+                        (when (eq status 'exit)
+                          (process-exit-status proc)))
+                  (setf (map-elt entry :signal)
+                        (when (eq status 'signal)
+                          (number-to-string (process-exit-status proc))))
+                  (agent-shell--terminal-put state terminal-id entry)
+                  (agent-shell--terminal-finalize state terminal-id))))
+            (acp-send-response
+             :client (map-elt state :client)
+             :response `((:request-id . ,.id)
+                         (:result . ((terminalId . ,terminal-id)))))))
+      (quit
+       (acp-send-response
+        :client (map-elt state :client)
+        :response `((:request-id . ,.id)
+                    (:error . ,(acp-make-error
+                                :code -32603
+                                :message "Operation cancelled by user")))))
+      (error
+       (acp-send-response
+        :client (map-elt state :client)
+        :response `((:request-id . ,.id)
+                    (:error . ,(acp-make-error
+                                :code -32603
+                                :message (error-message-string err)))))))))
+
+(cl-defun agent-shell--on-terminal-output-request (&key state request)
+  "Handle terminal/output REQUEST with STATE."
+  (let-alist request
+    (let* ((terminal-id (agent-shell--meta-lookup .params 'terminalId))
+           (terminal (and terminal-id (agent-shell--terminal-get state terminal-id))))
+      (if (and terminal (not (map-elt terminal :released)))
+          (let* ((output (or (map-elt terminal :output) ""))
+                 (truncated (if (map-elt terminal :truncated) t :false))
+                 (exit-status (agent-shell--terminal-exit-status terminal)))
+            (acp-send-response
+             :client (map-elt state :client)
+             :response `((:request-id . ,.id)
+                         (:result . ((output . ,output)
+                                     (truncated . ,truncated)
+                                     ,@(when exit-status
+                                         `((exitStatus . ,exit-status))))))))
+        (acp-send-response
+         :client (map-elt state :client)
+         :response `((:request-id . ,.id)
+                     (:error . ,(acp-make-error
+                                 :code -32002
+                                 :message "Terminal not found"))))))))
+
+(cl-defun agent-shell--on-terminal-wait-for-exit-request (&key state request)
+  "Handle terminal/wait_for_exit REQUEST with STATE."
+  (let-alist request
+    (let* ((terminal-id (agent-shell--meta-lookup .params 'terminalId))
+           (terminal (and terminal-id (agent-shell--terminal-get state terminal-id))))
+      (cond
+       ((or (not terminal) (map-elt terminal :released))
+        (acp-send-response
+         :client (map-elt state :client)
+         :response `((:request-id . ,.id)
+                     (:error . ,(acp-make-error
+                                 :code -32002
+                                 :message "Terminal not found")))))
+       ((or (map-elt terminal :exit-code)
+            (map-elt terminal :signal))
+        (acp-send-response
+         :client (map-elt state :client)
+         :response `((:request-id . ,.id)
+                     (:result . ,(agent-shell--terminal-exit-status terminal)))))
+       (t
+        (let ((waiters (map-elt terminal :waiters)))
+          (setf (map-elt terminal :waiters) (cons .id waiters))
+          (agent-shell--terminal-put state terminal-id terminal)))))))
+
+(cl-defun agent-shell--on-terminal-kill-request (&key state request)
+  "Handle terminal/kill REQUEST with STATE."
+  (let-alist request
+    (let* ((terminal-id (agent-shell--meta-lookup .params 'terminalId))
+           (terminal (and terminal-id (agent-shell--terminal-get state terminal-id))))
+      (if (and terminal (not (map-elt terminal :released)))
+          (progn
+            (when-let ((proc (map-elt terminal :process)))
+              (ignore-errors (kill-process proc)))
+            (acp-send-response
+             :client (map-elt state :client)
+             :response `((:request-id . ,.id)
+                         (:result . nil))))
+        (acp-send-response
+         :client (map-elt state :client)
+         :response `((:request-id . ,.id)
+                     (:error . ,(acp-make-error
+                                 :code -32002
+                                 :message "Terminal not found"))))))))
+
+(cl-defun agent-shell--on-terminal-release-request (&key state request)
+  "Handle terminal/release REQUEST with STATE."
+  (let-alist request
+    (let* ((terminal-id (agent-shell--meta-lookup .params 'terminalId))
+           (terminal (and terminal-id (agent-shell--terminal-get state terminal-id))))
+      (if terminal
+          (progn
+            (setf (map-elt terminal :released) t)
+            (agent-shell--terminal-put state terminal-id terminal)
+            (when-let ((proc (map-elt terminal :process)))
+              (ignore-errors (kill-process proc)))
+            (when (or (map-elt terminal :exit-code)
+                      (map-elt terminal :signal))
+              (agent-shell--terminal-finalize state terminal-id))
+            (acp-send-response
+             :client (map-elt state :client)
+             :response `((:request-id . ,.id)
+                         (:result . nil))))
+        (acp-send-response
+         :client (map-elt state :client)
+         :response `((:request-id . ,.id)
+                     (:error . ,(acp-make-error
+                                 :code -32002
+                                 :message "Terminal not found"))))))))
 
 (cl-defun agent-shell--extract-buffer-text (&key buffer line limit)
   "Extract text from BUFFER starting from LINE with optional LIMIT.
@@ -3100,7 +3465,9 @@ Must provide ON-INITIATED (lambda ())."
                             (title . "Emacs Agent Shell")
                             (version . ,agent-shell--version))
              :read-text-file-capability agent-shell-text-file-capabilities
-             :write-text-file-capability agent-shell-text-file-capabilities)
+             :write-text-file-capability agent-shell-text-file-capabilities
+             :terminal-capability agent-shell-terminal-capability
+             :meta-capabilities agent-shell-client-capabilities-meta)
    :on-success (lambda (response)
                  (with-current-buffer shell-buffer
                    (let ((acp-session-capabilities (or (map-elt response 'sessionCapabilities)
