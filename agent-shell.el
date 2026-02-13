@@ -3261,7 +3261,7 @@ prompting for a session to pick (still asks for confirmation)."
                                ('latest (car sessions))
                                ('prompt (agent-shell--prompt-select-session sessions))
                                (_ (message "Unknown session load strategy '%s', starting a new session"
-                                          agent-shell-session-load-strategy)
+                                           agent-shell-session-load-strategy)
                                   nil))
                            (quit nil)))
                         (session-id (and selected-session
@@ -3277,16 +3277,16 @@ prompting for a session to pick (still asks for confirmation)."
                          (acp-send-request
                           :client (map-elt (agent-shell--state) :client)
                           :request (let ((cwd (agent-shell--resolve-path (agent-shell-cwd)))
-                                        (mcp-servers (agent-shell--mcp-servers)))
-                                    (if (map-elt (agent-shell--state) :supports-session-load)
-                                        (acp-make-session-load-request
-                                         :session-id session-id
-                                         :cwd cwd
-                                         :mcp-servers mcp-servers)
-                                      (acp-make-session-resume-request
-                                       :session-id session-id
-                                       :cwd cwd
-                                       :mcp-servers mcp-servers)))
+                                         (mcp-servers (agent-shell--mcp-servers)))
+                                     (if (map-elt (agent-shell--state) :supports-session-load)
+                                         (acp-make-session-load-request
+                                          :session-id session-id
+                                          :cwd cwd
+                                          :mcp-servers mcp-servers)
+                                       (acp-make-session-resume-request
+                                        :session-id session-id
+                                        :cwd cwd
+                                        :mcp-servers mcp-servers)))
                           :buffer (current-buffer)
                           :on-success (lambda (load-response)
                                         (agent-shell--set-session-from-response
