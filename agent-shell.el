@@ -217,21 +217,19 @@ See `acp-make-initialize-request' for details."
   :type 'boolean
   :group 'agent-shell)
 
-(defcustom agent-shell-terminal-capability t
+(defconst agent-shell-terminal-capability t
   "Whether agents are initialized with terminal command capability.
 
-See `acp-make-initialize-request' for details."
-  :type 'boolean
-  :group 'agent-shell)
+This is intrinsic to the protocol support and is not intended to be
+customized. See `acp-make-initialize-request' for details.")
 
-(defcustom agent-shell-client-capabilities-meta
+(defconst agent-shell-client-capabilities-meta
   '((terminal_output . t)
     (terminal-auth . t))
   "Extra client capabilities to send under \"_meta\" during initialization.
 
-See `acp-make-initialize-request' for details."
-  :type '(alist :key-type symbol :value-type sexp)
-  :group 'agent-shell)
+This is intrinsic to the protocol support and is not intended to be
+customized. See `acp-make-initialize-request' for details.")
 
 (defcustom agent-shell-write-inhibit-minor-modes '(aggressive-indent-mode)
   "List of minor mode commands to inhibit during `fs/write_text_file' edits.
@@ -1179,7 +1177,10 @@ otherwise returns COMMAND unchanged."
       (append (list command) args)))))
 
 (defun agent-shell--terminal-truncate-output (output limit)
-  "Truncate OUTPUT to LIMIT bytes, returning (OUTPUT . TRUNCATED)."
+  "Truncate OUTPUT to LIMIT bytes, returning (OUTPUT . TRUNCATED).
+
+When LIMIT is set, keep the most recent bytes so the terminal/output
+response stays within the requested bound."
   (cond
    ((not (and limit (numberp limit))) (cons output nil))
    ((<= limit 0) (cons "" t))
@@ -1194,6 +1195,9 @@ otherwise returns COMMAND unchanged."
           (setq index (1+ index))))
       (cons (substring output index) t)))))
 
+;; Store terminal output in state rather than a buffer. The only consumer
+;; is terminal/output, so a string avoids buffer overhead and keeps output
+;; byte limiting straightforward.
 (defun agent-shell--terminal-append-output (state terminal-id chunk)
   "Append CHUNK to TERMINAL-ID output stored in STATE."
   (when (and chunk (not (string-empty-p chunk)))
@@ -1386,6 +1390,8 @@ otherwise returns COMMAND unchanged."
                   :data (list (cons :tool-call-id .toolCallId)
                               (cons :tool-call (map-nested-elt state (list :tool-calls .toolCallId)))))
                  (let* ((diff (map-nested-elt state `(:tool-calls ,.toolCallId :diff)))
+                        ;; NOTE: If tool call updates include new content
+                        ;; types, extend rendering here.
                         (terminal-data (agent-shell--tool-call-terminal-output-data update))
                         (content-text (or terminal-data
                                           (agent-shell--tool-call-content-text .content)
