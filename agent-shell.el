@@ -116,15 +116,6 @@ When non-nil, user message sections are expanded."
   :type 'boolean
   :group 'agent-shell)
 
-(defcustom agent-shell-tool-call-streaming-fast-path t
-  "Whether to stream tool call output with minimal formatting.
-
-When non-nil, tool call output is appended directly without
-markdown formatting and the final formatted block is rendered
-when the tool call completes."
-  :type 'boolean
-  :group 'agent-shell)
-
 (defcustom agent-shell-show-config-icons t
   "Whether to show icons in agent config selection."
   :type 'boolean
@@ -1117,10 +1108,6 @@ otherwise returns COMMAND unchanged."
           data)))))
 
 
-(defun agent-shell--tool-call-streaming-fast-path-p ()
-  "Return non-nil when tool call streaming fast path is enabled."
-  (and agent-shell-tool-call-streaming-fast-path t))
-
 (defun agent-shell--tool-call-content-text (content)
   "Return concatenated text from tool call CONTENT items."
   (let* ((items (cond
@@ -1685,11 +1672,7 @@ otherwise returns COMMAND unchanged."
                   :expanded t))
                (map-put! state :last-entry-type "plan"))
               ((equal (map-elt update 'sessionUpdate) "tool_call_update")
-               (cond
-                ((agent-shell--tool-call-streaming-fast-path-p)
-                 (agent-shell--handle-tool-call-update-streaming state update))
-                (t
-                 (agent-shell--handle-tool-call-update state update)))
+               (agent-shell--handle-tool-call-update-streaming state update)
                (map-put! state :last-entry-type "tool_call_update"))
               ((equal (map-elt update 'sessionUpdate) "available_commands_update")
                (let-alist update
