@@ -134,16 +134,6 @@ When non-nil, user message sections are expanded."
   :type 'boolean
   :group 'agent-shell)
 
-(defcustom agent-shell-debug-prompt-watch-enabled t
-  "Whether to periodically check for prompt focus drift."
-  :type 'boolean
-  :group 'agent-shell)
-
-(defcustom agent-shell-debug-prompt-watch-interval 1.0
-  "Seconds between prompt focus drift checks."
-  :type 'number
-  :group 'agent-shell)
-
 (defcustom agent-shell-path-resolver-function nil
   "Function for resolving remote paths on the local file-system, and vice versa.
 
@@ -603,8 +593,6 @@ HEARTBEAT, and AUTHENTICATE-REQUEST-MAKER."
         (cons :prompt-capabilities nil)
         (cons :event-subscriptions nil)
         (cons :pending-requests nil)
-        (cons :debug-prompt-watch-last-check nil)
-        (cons :debug-prompt-watch-drift nil)
         (cons :usage (list (cons :total-tokens 0)
                            (cons :input-tokens 0)
                            (cons :output-tokens 0)
@@ -1288,26 +1276,6 @@ otherwise returns COMMAND unchanged."
                      (goto-char (point-max)))))
                windows was-at-end))))
 
-
-(defun agent-shell--capture-window-prompt-state (buffer)
-  "Return list of (WINDOW WAS-AT-PROMPT) for BUFFER."
-  (let ((states nil))
-    (dolist (window (get-buffer-window-list buffer nil t))
-      (with-current-buffer buffer
-        (save-excursion
-          (goto-char (window-point window))
-          (push (list window (ignore-errors (shell-maker-point-at-last-prompt-p)))
-                states))))
-    (nreverse states)))
-
-(defun agent-shell--restore-window-prompt-state (buffer states)
-  "Restore prompt state for BUFFER using STATES from capture."
-  (with-current-buffer buffer
-    (dolist (entry states)
-      (let ((window (car entry))
-            (was-at-prompt (cadr entry)))
-        (when (and was-at-prompt (window-live-p window))
-          (set-window-point window (point-max)))))))
 
 (defun agent-shell--append-tool-call-output (state tool-call-id text)
   "Append TEXT to tool call output body without formatting."
@@ -2873,11 +2841,7 @@ variable (see makunbound)"))
                                                                 ((get-buffer-window viewport-buffer)))
                                                       (with-current-buffer viewport-buffer
                                                         (agent-shell-viewport--update-header)))
-                                                    (when (buffer-live-p shell-buffer)
-                                                      (with-current-buffer shell-buffer
-                                                        (agent-shell--debug-check-prompt-drift
-                                                         agent-shell--state
-                                                         shell-buffer)))))
+                                                  ))
                                       :client-maker (map-elt config :client-maker)
                                       :needs-authentication (map-elt config :needs-authentication)
                                       :authenticate-request-maker (map-elt config :authenticate-request-maker)
@@ -3034,61 +2998,58 @@ by default."
               (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
                 (markdown-overlays-put))))
           (goto-char saved-point)))))
-  (let ((shell-buffer (map-elt state :buffer)))
-    (with-current-buffer shell-buffer
-      (unless (and (derived-mode-p 'agent-shell-mode)
-                   (equal (current-buffer) shell-buffer))
-        (error "Editing the wrong buffer: %s" (current-buffer)))
-      (let ((prompt-state (agent-shell--capture-window-prompt-state shell-buffer)))
-        (unwind-protect
-            (shell-maker-with-auto-scroll-edit
-             (when-let* ((range (agent-shell-ui-update-fragment
-                                 (agent-shell-ui-make-fragment-model
-                                  :namespace-id (or namespace-id
-                                                    (map-elt state :request-count))
-                                  :block-id block-id
-                                  :label-left label-left
-                                  :label-right label-right
-                                  :body body)
-                                 :navigation navigation
-                                 :append append
-                                 :create-new create-new
-                                 :expanded expanded
-                                 :no-undo t))
-                         (padding-start (map-nested-elt range '(:padding :start)))
-                         (padding-end (map-nested-elt range '(:padding :end)))
-                         (block-start (map-nested-elt range '(:block :start)))
-                         (block-end (map-nested-elt range '(:block :end))))
-               (save-restriction
-                 ;; TODO: Move this to shell-maker?
-                 (let ((inhibit-read-only t))
-                   ;; comint relies on field property to
-                   ;; derive `comint-next-prompt'.
-                   ;; Marking as field to avoid false positives in
-                   ;; `agent-shell-next-item' and `agent-shell-previous-item'.
-                   (add-text-properties (or padding-start block-start)
-                                        (or padding-end block-end) '(field output))
-                   ;; Apply markdown overlay to body.
-                   (when-let ((body-start (map-nested-elt range '(:body :start)))
-                              (body-end (map-nested-elt range '(:body :end))))
-                     (narrow-to-region body-start body-end)
-                     (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
-                       (markdown-overlays-put))
-                     (widen))
-                   ;;
-                   ;; Note: For now, we're skipping applying markdown overlays
-                   ;; on left labels as they currently carry propertized text
-                   ;; for statuses (ie. boxed).
-                   ;;
-                   ;; Apply markdown overlay to right label.
-                   (when-let ((label-right-start (map-nested-elt range '(:label-right :start)))
-                              (label-right-end (map-nested-elt range '(:label-right :end))))
-                     (narrow-to-region label-right-start label-right-end)
-                     (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
-                       (markdown-overlays-put))
-                     (widen))))
-               (run-hook-with-args 'agent-shell-section-functions range)))
-          (agent-shell--restore-window-prompt-state shell-buffer prompt-state))))))
+  (with-current-buffer (map-elt state :buffer)
+    (unless (and (derived-mode-p 'agent-shell-mode)
+                 (equal (current-buffer)
+                        (map-elt state :buffer)))
+      (error "Editing the wrong buffer: %s" (current-buffer)))
+    (shell-maker-with-auto-scroll-edit
+     (when-let* ((range (agent-shell-ui-update-fragment
+                         (agent-shell-ui-make-fragment-model
+                          :namespace-id (or namespace-id
+                                            (map-elt state :request-count))
+                          :block-id block-id
+                          :label-left label-left
+                          :label-right label-right
+                          :body body)
+                         :navigation navigation
+                         :append append
+                         :create-new create-new
+                         :expanded expanded
+                         :no-undo t))
+                 (padding-start (map-nested-elt range '(:padding :start)))
+                 (padding-end (map-nested-elt range '(:padding :end)))
+                 (block-start (map-nested-elt range '(:block :start)))
+                 (block-end (map-nested-elt range '(:block :end))))
+       (save-restriction
+         ;; TODO: Move this to shell-maker?
+         (let ((inhibit-read-only t))
+           ;; comint relies on field property to
+           ;; derive `comint-next-prompt'.
+           ;; Marking as field to avoid false positives in
+           ;; `agent-shell-next-item' and `agent-shell-previous-item'.
+           (add-text-properties (or padding-start block-start)
+                                (or padding-end block-end) '(field output))
+           ;; Apply markdown overlay to body.
+           (when-let ((body-start (map-nested-elt range '(:body :start)))
+                      (body-end (map-nested-elt range '(:body :end))))
+             (narrow-to-region body-start body-end)
+             (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
+               (markdown-overlays-put))
+             (widen))
+           ;;
+           ;; Note: For now, we're skipping applying markdown overlays
+           ;; on left labels as they currently carry propertized text
+           ;; for statuses (ie. boxed).
+           ;;
+           ;; Apply markdown overlay to right label.
+           (when-let ((label-right-start (map-nested-elt range '(:label-right :start)))
+                      (label-right-end (map-nested-elt range '(:label-right :end))))
+             (narrow-to-region label-right-start label-right-end)
+             (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
+               (markdown-overlays-put))
+             (widen))))
+       (run-hook-with-args 'agent-shell-section-functions range)))))
 
 (cl-defun agent-shell--update-text (&key state namespace-id block-id text append create-new)
   "Update plain text entry in the shell buffer.
@@ -3164,18 +3125,15 @@ APPEND and CREATE-NEW control update behavior."
       (with-current-buffer buffer
         (save-excursion
           (goto-char (window-point window))
-          (let* ((at-prompt (ignore-errors (shell-maker-point-at-last-prompt-p)))
-                 (at-end (eobp))
-                 (after-output (and at-prompt (not at-end))))
+          (let ((at-prompt (ignore-errors (shell-maker-point-at-last-prompt-p))))
             (push (list :window window
                         :selected (eq window (selected-window))
                         :point (point)
                         :point-max (point-max)
-                        :at-prompt at-prompt
-                        :at-end at-end
-                        :after-output after-output)
+                        :at-prompt at-prompt)
                   info)))))
     (nreverse info)))
+
 
 (defun agent-shell--debug-window-info-string (buffer)
   "Format window info for BUFFER."
@@ -3184,16 +3142,15 @@ APPEND and CREATE-NEW control update behavior."
         "no-windows"
       (mapconcat
        (lambda (entry)
-         (format "{win=%s selected=%s point=%d point-max=%d at-prompt=%s at-end=%s after-output=%s}"
+         (format "{win=%s selected=%s point=%d point-max=%d at-prompt=%s}"
                  (plist-get entry :window)
                  (plist-get entry :selected)
                  (plist-get entry :point)
                  (plist-get entry :point-max)
-                 (plist-get entry :at-prompt)
-                 (plist-get entry :at-end)
-                 (plist-get entry :after-output)))
+                 (plist-get entry :at-prompt)))
        info
        " "))))
+
 
 (defun agent-shell--debug-log-notification-error (state update err)
   "Log notification ERR details with buffer/window context."
@@ -3212,37 +3169,6 @@ APPEND and CREATE-NEW control update behavior."
      (agent-shell--debug-buffer-read-only shell-buffer)
      (when (buffer-live-p shell-buffer)
        (agent-shell--debug-window-info-string shell-buffer)))))
-
-(defun agent-shell--debug-check-prompt-drift (state shell-buffer)
-  "Detect prompt drift in SHELL-BUFFER and log when it first appears."
-  (when (and agent-shell-debug-prompt-watch-enabled
-             (buffer-live-p shell-buffer))
-    (with-current-buffer shell-buffer
-      (when (derived-mode-p 'agent-shell-mode)
-        (let ((now (float-time))
-              (last (map-elt state :debug-prompt-watch-last-check)))
-          (when (or (not last)
-                    (>= (- now last) agent-shell-debug-prompt-watch-interval))
-            (map-put! state :debug-prompt-watch-last-check now)
-            (unless (shell-maker-busy)
-              (let ((info (agent-shell--debug-window-info shell-buffer))
-                    (drift nil))
-                (dolist (entry info)
-                  (when (or (not (plist-get entry :at-prompt))
-                            (plist-get entry :after-output))
-                    (setq drift t)))
-                (let ((was-drift (map-elt state :debug-prompt-watch-drift)))
-                  (when (and drift (not was-drift))
-                    (map-put! state :debug-prompt-watch-drift t)
-                    (agent-shell--debug-log
-                     "PROMPT_DRIFT buffer=%s windows=%s"
-                     (buffer-name shell-buffer)
-                     (agent-shell--debug-window-info-string shell-buffer)))
-                  (when (and (not drift) was-drift)
-                    (map-put! state :debug-prompt-watch-drift nil)
-                    (agent-shell--debug-log
-                     "PROMPT_RECOVERED buffer=%s"
-                     (buffer-name shell-buffer))))))))))))
 
 (defun agent-shell--debug-bundle-copy-to-clipboard (text)
   "Copy TEXT to the clipboard and kill ring when possible."
