@@ -1446,6 +1446,9 @@ otherwise returns COMMAND unchanged."
     (map-put! state :terminal-count count)
     terminal-id))
 
+(defvar agent-shell--terminal-release-grace-seconds 5
+  "Seconds to retain released terminals for late output or wait requests.")
+
 (defun agent-shell--terminal-get (state terminal-id)
   "Return terminal entry for TERMINAL-ID."
   (map-nested-elt state `(:terminals ,terminal-id)))
@@ -1593,7 +1596,23 @@ otherwise returns COMMAND unchanged."
   (when-let ((terminal (agent-shell--terminal-get state terminal-id)))
     (agent-shell--terminal-respond-waiters state terminal-id)
     (when (map-elt terminal :released)
-      (agent-shell--terminal-remove state terminal-id))))
+      (agent-shell--terminal-schedule-cleanup state terminal-id))))
+
+(defun agent-shell--terminal-schedule-cleanup (state terminal-id)
+  "Schedule cleanup for TERMINAL-ID after a short grace period."
+  (when-let* ((buffer (map-elt state :buffer))
+              (terminal (agent-shell--terminal-get state terminal-id)))
+    (unless (map-elt terminal :cleanup-timer)
+      (let ((timer (run-at-time
+                    agent-shell--terminal-release-grace-seconds nil
+                    (lambda ()
+                      (when (buffer-live-p buffer)
+                        (with-current-buffer buffer
+                          (when-let ((entry (agent-shell--terminal-get agent-shell--state terminal-id)))
+                            (when (map-elt entry :released)
+                              (agent-shell--terminal-remove agent-shell--state terminal-id)))))))))
+        (setf (map-elt terminal :cleanup-timer) timer)
+        (agent-shell--terminal-put state terminal-id terminal)))))
 
 (cl-defun agent-shell--on-notification (&key state notification)
   "Handle incoming notification using SHELL, STATE, and NOTIFICATION."
@@ -1954,7 +1973,7 @@ otherwise returns COMMAND unchanged."
   (let-alist request
     (let* ((terminal-id (agent-shell--meta-lookup .params 'terminalId))
            (terminal (and terminal-id (agent-shell--terminal-get state terminal-id))))
-      (if (and terminal (not (map-elt terminal :released)))
+      (if terminal
           (let* ((output (or (agent-shell--terminal-output-text terminal) ""))
                  (truncated (if (map-elt terminal :truncated) t :false))
                  (exit-status (agent-shell--terminal-exit-status terminal)))
@@ -1978,7 +1997,7 @@ otherwise returns COMMAND unchanged."
     (let* ((terminal-id (agent-shell--meta-lookup .params 'terminalId))
            (terminal (and terminal-id (agent-shell--terminal-get state terminal-id))))
       (cond
-       ((or (not terminal) (map-elt terminal :released))
+       ((not terminal)
         (acp-send-response
          :client (map-elt state :client)
          :response `((:request-id . ,.id)
@@ -2001,7 +2020,7 @@ otherwise returns COMMAND unchanged."
   (let-alist request
     (let* ((terminal-id (agent-shell--meta-lookup .params 'terminalId))
            (terminal (and terminal-id (agent-shell--terminal-get state terminal-id))))
-      (if (and terminal (not (map-elt terminal :released)))
+      (if terminal
           (progn
             (when-let ((proc (map-elt terminal :process)))
               (ignore-errors (kill-process proc)))
