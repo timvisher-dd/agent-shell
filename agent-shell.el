@@ -4679,10 +4679,13 @@ Mark model using CURRENT-MODEL-ID."
    :data models
    :columns (list
              (lambda (model)
-               (map-elt model :name)
-               (when (map-elt model :name)
-                 (propertize (map-elt model :name)
-                             'font-lock-face 'font-lock-function-name-face)))
+               (concat
+                (when (map-elt model :name)
+                  (propertize (map-elt model :name)
+                              'font-lock-face 'font-lock-function-name-face))
+                (when (map-elt model :model-id)
+                  (propertize (format " (%s)" (map-elt model :model-id))
+                              'font-lock-face 'font-lock-function-name-face))))
              (lambda (model)
                (when (map-elt model :description)
                  (propertize (map-elt model :description)
