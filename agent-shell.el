@@ -3001,26 +3001,26 @@ by default."
            ;; Marking as field to avoid false positives in
            ;; `agent-shell-next-item' and `agent-shell-previous-item'.
            (add-text-properties (or padding-start block-start)
-                                (or padding-end block-end) '(field output)))
-         ;; Apply markdown overlay to body.
-         (when-let ((body-start (map-nested-elt range '(:body :start)))
-                    (body-end (map-nested-elt range '(:body :end))))
-           (narrow-to-region body-start body-end)
-           (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
-             (markdown-overlays-put))
-           (widen))
-         ;;
-         ;; Note: For now, we're skipping applying markdown overlays
-         ;; on left labels as they currently carry propertized text
-         ;; for statuses (ie. boxed).
-         ;;
-         ;; Apply markdown overlay to right label.
-         (when-let ((label-right-start (map-nested-elt range '(:label-right :start)))
-                    (label-right-end (map-nested-elt range '(:label-right :end))))
-           (narrow-to-region label-right-start label-right-end)
-           (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
-             (markdown-overlays-put))
-           (widen)))
+                                (or padding-end block-end) '(field output))
+           ;; Apply markdown overlay to body.
+           (when-let ((body-start (map-nested-elt range '(:body :start)))
+                      (body-end (map-nested-elt range '(:body :end))))
+             (narrow-to-region body-start body-end)
+             (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
+               (markdown-overlays-put))
+             (widen))
+           ;;
+           ;; Note: For now, we're skipping applying markdown overlays
+           ;; on left labels as they currently carry propertized text
+           ;; for statuses (ie. boxed).
+           ;;
+           ;; Apply markdown overlay to right label.
+           (when-let ((label-right-start (map-nested-elt range '(:label-right :start)))
+                      (label-right-end (map-nested-elt range '(:label-right :end))))
+             (narrow-to-region label-right-start label-right-end)
+             (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
+               (markdown-overlays-put))
+             (widen))))
        (run-hook-with-args 'agent-shell-section-functions range)))))
 
 (cl-defun agent-shell--update-text (&key state namespace-id block-id text append create-new)
@@ -3221,6 +3221,18 @@ APPEND and CREATE-NEW control update behavior."
       (insert (format-kbd-macro keys t))
       (insert "\n"))))
 
+(defun agent-shell--debug-bundle-write-lossage (path)
+  "Write lossage output to PATH."
+  (save-window-excursion
+    (condition-case err
+        (view-lossage)
+      (error
+       (agent-shell--debug-log "lossage capture failed: %s" err)))
+    (let ((lossage-buffer (get-buffer "*Lossage*")))
+      (if lossage-buffer
+          (agent-shell--debug-bundle-write-buffer lossage-buffer path)
+        (agent-shell--debug-bundle-write-recent-keys path)))))
+
 (defun agent-shell--debug-bundle-default-dir ()
   "Return default directory for debug bundles."
   (let* ((root (agent-shell-cwd))
@@ -3296,9 +3308,7 @@ APPEND and CREATE-NEW control update behavior."
       (agent-shell--debug-bundle-write-buffer (get-buffer agent-shell--debug-log-buffer-name)
                                               debug-log-path)
       (agent-shell--debug-bundle-write-buffer (get-buffer "*Messages*") messages-path)
-      (save-window-excursion
-        (view-lossage)
-        (agent-shell--debug-bundle-write-buffer (get-buffer "*Lossage*") lossage-path))
+      (agent-shell--debug-bundle-write-lossage lossage-path)
       (agent-shell--debug-bundle-write-recent-keys recent-keys-path)
       (agent-shell--debug-bundle-write-load-path load-path-path)
       (agent-shell--debug-bundle-write-libraries libraries-path)
