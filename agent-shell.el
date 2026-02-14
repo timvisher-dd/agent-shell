@@ -1473,7 +1473,7 @@ otherwise returns COMMAND unchanged."
    (t nil)))
 
 (defun agent-shell--terminal-normalize-env (env)
-  "Normalize ENV to a list of "NAME=VALUE" strings."
+  "Normalize ENV to a list of \"NAME=VALUE\" strings."
   (let ((entries (cond
                   ((vectorp env) (append env nil))
                   ((listp env) env)
