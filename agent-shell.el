@@ -129,6 +129,21 @@ When non-nil, user message sections are expanded."
          (set-default symbol value)
          (setq acp-logging-enabled value)))
 
+(defcustom agent-shell-debug-logging-enabled t
+  "Whether agent-shell debug logging is enabled."
+  :type 'boolean
+  :group 'agent-shell)
+
+(defcustom agent-shell-debug-prompt-watch-enabled t
+  "Whether to periodically check for prompt focus drift."
+  :type 'boolean
+  :group 'agent-shell)
+
+(defcustom agent-shell-debug-prompt-watch-interval 1.0
+  "Seconds between prompt focus drift checks."
+  :type 'number
+  :group 'agent-shell)
+
 (defcustom agent-shell-path-resolver-function nil
   "Function for resolving remote paths on the local file-system, and vice versa.
 
@@ -1561,7 +1576,8 @@ otherwise returns COMMAND unchanged."
   (let-alist notification
     (cond ((equal .method "session/update")
            (let ((update (map-elt (map-elt notification 'params) 'update)))
-             (cond
+             (condition-case err
+                 (cond
               ((equal (map-elt update 'sessionUpdate) "tool_call")
                (agent-shell--save-tool-call
                 state
@@ -1722,7 +1738,11 @@ otherwise returns COMMAND unchanged."
                 :body (format "%s" notification)
                 :create-new t
                 :navigation 'never)
-               (map-put! state :last-entry-type nil)))))
+               (map-put! state :last-entry-type nil)))
+               (error
+                (unless (eq (car err) 'quit)
+                  (agent-shell--debug-log-notification-error state update err))
+                (signal (car err) (cdr err))))))
           (t
            (agent-shell--update-fragment
             :state state
@@ -2786,7 +2806,12 @@ variable (see makunbound)"))
                                                                                   :existing-only t))
                                                                 ((get-buffer-window viewport-buffer)))
                                                       (with-current-buffer viewport-buffer
-                                                        (agent-shell-viewport--update-header)))))
+                                                        (agent-shell-viewport--update-header)))
+                                                    (when (buffer-live-p shell-buffer)
+                                                      (with-current-buffer shell-buffer
+                                                        (agent-shell--debug-check-prompt-drift
+                                                         agent-shell--state
+                                                         shell-buffer)))))
                                       :client-maker (map-elt config :client-maker)
                                       :needs-authentication (map-elt config :needs-authentication)
                                       :authenticate-request-maker (map-elt config :authenticate-request-maker)
@@ -3046,6 +3071,154 @@ APPEND and CREATE-NEW control update behavior."
   (acp-reset-logs :client (map-elt (agent-shell--state) :client))
   (message "Logs reset"))
 
+(defvar agent-shell--debug-log-buffer-name "*Agent Shell Debug*")
+
+(defun agent-shell--debug-log (fmt &rest args)
+  "Append a timestamped debug log line."
+  (when agent-shell-debug-logging-enabled
+    (with-current-buffer (get-buffer-create agent-shell--debug-log-buffer-name)
+      (let ((inhibit-read-only t))
+        (goto-char (point-max))
+        (insert (format-time-string "%FT%T%z "))
+        (insert (apply #'format fmt args))
+        (insert "\n")))))
+
+(defun agent-shell--debug-buffer-read-only (buffer)
+  "Return BUFFER read-only state or nil when BUFFER is not live."
+  (when (buffer-live-p buffer)
+    (buffer-local-value 'buffer-read-only buffer)))
+
+(defun agent-shell--debug-window-info (buffer)
+  "Collect window point/prompt state for BUFFER."
+  (let ((info nil))
+    (dolist (window (get-buffer-window-list buffer nil t))
+      (with-current-buffer buffer
+        (save-excursion
+          (goto-char (window-point window))
+          (let ((at-prompt (ignore-errors (shell-maker-point-at-last-prompt-p))))
+            (push (list :window window
+                        :selected (eq window (selected-window))
+                        :point (point)
+                        :point-max (point-max)
+                        :at-prompt at-prompt)
+                  info)))))
+    (nreverse info)))
+
+(defun agent-shell--debug-window-info-string (buffer)
+  "Format window info for BUFFER."
+  (let ((info (agent-shell--debug-window-info buffer)))
+    (if (null info)
+        "no-windows"
+      (mapconcat
+       (lambda (entry)
+         (format "{win=%s selected=%s point=%d point-max=%d at-prompt=%s}"
+                 (plist-get entry :window)
+                 (plist-get entry :selected)
+                 (plist-get entry :point)
+                 (plist-get entry :point-max)
+                 (plist-get entry :at-prompt)))
+       info
+       " "))))
+
+(defun agent-shell--debug-log-notification-error (state update err)
+  "Log notification ERR details with buffer/window context."
+  (let* ((shell-buffer (map-elt state :buffer))
+         (current-buffer (current-buffer))
+         (session-update (map-elt update 'sessionUpdate))
+         (tool-call-id (map-elt update 'toolCallId)))
+    (agent-shell--debug-log
+     "NOTIFICATION ERROR: %s update=%s toolCallId=%s current=%s ro=%s shell=%s ro=%s windows=%s"
+     (error-message-string err)
+     session-update
+     tool-call-id
+     (buffer-name current-buffer)
+     (agent-shell--debug-buffer-read-only current-buffer)
+     (when (buffer-live-p shell-buffer) (buffer-name shell-buffer))
+     (agent-shell--debug-buffer-read-only shell-buffer)
+     (when (buffer-live-p shell-buffer)
+       (agent-shell--debug-window-info-string shell-buffer)))))
+
+(defun agent-shell--debug-check-prompt-drift (state shell-buffer)
+  "Detect prompt drift in SHELL-BUFFER and log when it first appears."
+  (when (and agent-shell-debug-prompt-watch-enabled
+             (buffer-live-p shell-buffer))
+    (with-current-buffer shell-buffer
+      (when (derived-mode-p 'agent-shell-mode)
+        (let ((now (float-time))
+              (last (map-elt state :debug-prompt-watch-last-check)))
+          (when (or (not last)
+                    (>= (- now last) agent-shell-debug-prompt-watch-interval))
+            (map-put! state :debug-prompt-watch-last-check now)
+            (unless (shell-maker-busy)
+              (let ((info (agent-shell--debug-window-info shell-buffer))
+                    (drift nil))
+                (dolist (entry info)
+                  (when (not (plist-get entry :at-prompt))
+                    (setq drift t)))
+                (let ((was-drift (map-elt state :debug-prompt-watch-drift)))
+                  (when (and drift (not was-drift))
+                    (map-put! state :debug-prompt-watch-drift t)
+                    (agent-shell--debug-log
+                     "PROMPT_DRIFT buffer=%s windows=%s"
+                     (buffer-name shell-buffer)
+                     (agent-shell--debug-window-info-string shell-buffer)))
+                  (when (and (not drift) was-drift)
+                    (map-put! state :debug-prompt-watch-drift nil)
+                    (agent-shell--debug-log
+                     "PROMPT_RECOVERED buffer=%s"
+                     (buffer-name shell-buffer))))))))))))
+
+(defun agent-shell--debug-bundle-copy-to-clipboard (text)
+  "Copy TEXT to the clipboard and kill ring when possible."
+  (when (and text (not (string-empty-p text)))
+    (kill-new text)
+    (when (fboundp 'gui-set-selection)
+      (gui-set-selection 'CLIPBOARD text))
+    (when (executable-find "pbcopy")
+      (with-temp-buffer
+        (insert text)
+        (call-process-region (point-min) (point-max) "pbcopy" nil nil nil)))
+    text))
+
+(defun agent-shell--debug-bundle-write-load-path (path)
+  "Write `load-path' to PATH."
+  (with-temp-file path
+    (let ((print-circle t)
+          (print-length nil)
+          (print-level nil))
+      (pp load-path (current-buffer)))))
+
+(defun agent-shell--debug-bundle-write-libraries (path)
+  "Write library locations for core packages to PATH."
+  (with-temp-file path
+    (dolist (lib '("agent-shell"
+                   "agent-shell-openai"
+                   "agent-shell-ui"
+                   "shell-maker"
+                   "acp"))
+      (insert (format "%s: %s\n"
+                      lib
+                      (or (locate-library lib) "not-found"))))))
+
+(defun agent-shell--debug-bundle-write-env (path)
+  "Write relevant environment variables to PATH."
+  (with-temp-file path
+    (dolist (var '("TIMVISHER_AGENT_SHELL_CHECKOUT"
+                   "TIMVISHER_SHELL_MAKER_CHECKOUT"
+                   "TIMVISHER_ACP_CHECKOUT"
+                   "TIMVISHER_CODEX_LAUNCHER_PATH"
+                   "TIMVISHER_CODEX_LAUNCHER_SHA256"
+                   "TIMVISHER_CODEX_PROMPT"
+                   "TIMVISHER_CODEX_LOG_FILE"))
+      (insert (format "%s=%s\n" var (or (getenv var) ""))))))
+
+(defun agent-shell--debug-bundle-write-recent-keys (path)
+  "Write recent key events to PATH."
+  (with-temp-file path
+    (let ((keys (recent-keys)))
+      (insert (format-kbd-macro keys t))
+      (insert "\n"))))
+
 (defun agent-shell--debug-bundle-default-dir ()
   "Return default directory for debug bundles."
   (let* ((root (agent-shell-cwd))
@@ -3080,7 +3253,13 @@ APPEND and CREATE-NEW control update behavior."
     (insert (format "logging-enabled: %s\n" (if acp-logging-enabled "true" "false")))
     (insert (format "shell-buffer: %s\n" (buffer-name shell-buffer)))
     (insert (format "project-root: %s\n" project-root))
-    (insert (format "transcript: %s\n" (or transcript "none")))))
+    (insert (format "transcript: %s\n" (or transcript "none")))
+    (insert (format "launcher-path: %s\n" (or (getenv "TIMVISHER_CODEX_LAUNCHER_PATH") "none")))
+    (insert (format "launcher-sha256: %s\n" (or (getenv "TIMVISHER_CODEX_LAUNCHER_SHA256") "none")))
+    (insert (format "agent-shell-library: %s\n" (or (locate-library "agent-shell") "not-found")))
+    (insert (format "acp-library: %s\n" (or (locate-library "acp") "not-found")))
+    (insert (format "shell-maker-library: %s\n" (or (locate-library "shell-maker") "not-found")))
+    (insert "files: load-path.el libraries.txt environment.txt agent-shell-debug.log messages.log lossage.log\n")))
 
 (defun agent-shell-save-debug-bundle (directory)
   "Save ACP traffic/logs, transcript, *Messages*, and lossage to DIRECTORY."
@@ -3100,20 +3279,34 @@ APPEND and CREATE-NEW control update behavior."
            (dir (file-name-as-directory directory))
            (traffic-path (expand-file-name "traffic.traffic" dir))
            (log-path (expand-file-name "acp.log" dir))
+           (debug-log-path (expand-file-name "agent-shell-debug.log" dir))
            (messages-path (expand-file-name "messages.log" dir))
            (lossage-path (expand-file-name "lossage.log" dir))
+           (recent-keys-path (expand-file-name "recent-keys.txt" dir))
            (transcript-path (expand-file-name "transcript.md" dir))
+           (load-path-path (expand-file-name "load-path.el" dir))
+           (libraries-path (expand-file-name "libraries.txt" dir))
+           (env-path (expand-file-name "environment.txt" dir))
            (meta-path (expand-file-name "metadata.txt" dir)))
       (make-directory dir t)
       (agent-shell--debug-bundle-write-traffic client traffic-path)
       (agent-shell--debug-bundle-write-buffer (acp-logs-buffer :client client) log-path)
+      (agent-shell--debug-bundle-write-buffer (get-buffer agent-shell--debug-log-buffer-name)
+                                              debug-log-path)
       (agent-shell--debug-bundle-write-buffer (get-buffer "*Messages*") messages-path)
-      (view-lossage)
-      (agent-shell--debug-bundle-write-buffer (get-buffer "*Lossage*") lossage-path)
+      (save-window-excursion
+        (view-lossage)
+        (agent-shell--debug-bundle-write-buffer (get-buffer "*Lossage*") lossage-path))
+      (agent-shell--debug-bundle-write-recent-keys recent-keys-path)
+      (agent-shell--debug-bundle-write-load-path load-path-path)
+      (agent-shell--debug-bundle-write-libraries libraries-path)
+      (agent-shell--debug-bundle-write-env env-path)
       (when (and transcript (file-readable-p transcript))
         (copy-file transcript transcript-path t))
       (agent-shell--debug-bundle-write-metadata meta-path shell-buffer transcript project-root)
-      (message "Saved debug bundle to %s" dir))))
+      (agent-shell--debug-log "Saved debug bundle to %s" dir)
+      (let ((copied (agent-shell--debug-bundle-copy-to-clipboard dir)))
+        (message "Saved debug bundle to %s%s" dir (if copied " (copied to clipboard)" ""))))))
 
 (defun agent-shell-next-item ()
   "Go to next item.
