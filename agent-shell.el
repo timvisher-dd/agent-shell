@@ -121,6 +121,14 @@ When non-nil, user message sections are expanded."
   :type 'boolean
   :group 'agent-shell)
 
+(defcustom agent-shell-logging-enabled t
+  "Whether ACP logging/traffic capture is enabled for agent shells."
+  :type 'boolean
+  :group 'agent-shell
+  :set (lambda (symbol value)
+         (set-default symbol value)
+         (setq acp-logging-enabled value)))
+
 (defcustom agent-shell-path-resolver-function nil
   "Function for resolving remote paths on the local file-system, and vice versa.
 
@@ -2724,6 +2732,7 @@ See `agent-shell-make-agent-config' for config format.
 
 Set NO-FOCUS to start in background.
 Set NEW-SESSION to start a separate new session."
+  (setq acp-logging-enabled agent-shell-logging-enabled)
   (unless (version<= "0.85.1" shell-maker-version)
     (error "Please update shell-maker to version 0.85.1 or newer"))
   (unless (version<= "0.10.1" acp-package-version)
@@ -3027,7 +3036,8 @@ APPEND and CREATE-NEW control update behavior."
 (defun agent-shell-toggle-logging ()
   "Toggle logging."
   (interactive)
-  (setq acp-logging-enabled (not acp-logging-enabled))
+  (setq agent-shell-logging-enabled (not acp-logging-enabled))
+  (setq acp-logging-enabled agent-shell-logging-enabled)
   (message "Logging: %s" (if acp-logging-enabled "ON" "OFF")))
 
 (defun agent-shell-reset-logs ()
@@ -3035,6 +3045,75 @@ APPEND and CREATE-NEW control update behavior."
   (interactive)
   (acp-reset-logs :client (map-elt (agent-shell--state) :client))
   (message "Logs reset"))
+
+(defun agent-shell--debug-bundle-default-dir ()
+  "Return default directory for debug bundles."
+  (let* ((root (agent-shell-cwd))
+         (dir (expand-file-name ".agent-shell/debug-bundles" root))
+         (stamp (format-time-string "%Y%m%d-%H%M%S")))
+    (expand-file-name (format "bundle-%s" stamp) dir)))
+
+(defun agent-shell--debug-bundle-write-buffer (buffer path)
+  "Write BUFFER contents to PATH when BUFFER exists."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (write-region (point-min) (point-max) path nil 'silent))))
+
+(defun agent-shell--debug-bundle-write-traffic (client path)
+  "Write ACP traffic for CLIENT to PATH."
+  (when client
+    (let ((buffer (acp-traffic-buffer :client client)))
+      (with-current-buffer buffer
+        (unless (derived-mode-p 'acp-traffic-mode)
+          (acp-traffic-mode))
+        (let ((objects (acp-traffic--objects)))
+          (with-temp-file path
+            (let ((print-circle t))
+              (pp objects (current-buffer)))))))))
+
+(defun agent-shell--debug-bundle-write-metadata (path shell-buffer transcript project-root)
+  "Write metadata for SHELL-BUFFER and TRANSCRIPT to PATH."
+  (with-temp-file path
+    (insert (format "timestamp: %s\n" (format-time-string "%F %T")))
+    (insert (format "emacs-version: %s\n" (emacs-version)))
+    (insert (format "agent-shell-version: %s\n" agent-shell--version))
+    (insert (format "logging-enabled: %s\n" (if acp-logging-enabled "true" "false")))
+    (insert (format "shell-buffer: %s\n" (buffer-name shell-buffer)))
+    (insert (format "project-root: %s\n" project-root))
+    (insert (format "transcript: %s\n" (or transcript "none")))))
+
+(defun agent-shell-save-debug-bundle (directory)
+  "Save ACP traffic/logs, transcript, *Messages*, and lossage to DIRECTORY."
+  (interactive (list (read-directory-name
+                      "Save debug bundle to: "
+                      (agent-shell--debug-bundle-default-dir)
+                      nil nil)))
+  (let* ((shell-buffer (agent-shell--shell-buffer :no-create t :no-error t)))
+    (unless shell-buffer
+      (user-error "No agent shell buffer found"))
+    (let* ((client (with-current-buffer shell-buffer
+                     (map-elt agent-shell--state :client)))
+           (transcript (with-current-buffer shell-buffer
+                         agent-shell--transcript-file))
+           (project-root (with-current-buffer shell-buffer
+                           (agent-shell-cwd)))
+           (dir (file-name-as-directory directory))
+           (traffic-path (expand-file-name "traffic.traffic" dir))
+           (log-path (expand-file-name "acp.log" dir))
+           (messages-path (expand-file-name "messages.log" dir))
+           (lossage-path (expand-file-name "lossage.log" dir))
+           (transcript-path (expand-file-name "transcript.md" dir))
+           (meta-path (expand-file-name "metadata.txt" dir)))
+      (make-directory dir t)
+      (agent-shell--debug-bundle-write-traffic client traffic-path)
+      (agent-shell--debug-bundle-write-buffer (acp-logs-buffer :client client) log-path)
+      (agent-shell--debug-bundle-write-buffer (get-buffer "*Messages*") messages-path)
+      (view-lossage)
+      (agent-shell--debug-bundle-write-buffer (get-buffer "*Lossage*") lossage-path)
+      (when (and transcript (file-readable-p transcript))
+        (copy-file transcript transcript-path t))
+      (agent-shell--debug-bundle-write-metadata meta-path shell-buffer transcript project-root)
+      (message "Saved debug bundle to %s" dir))))
 
 (defun agent-shell-next-item ()
   "Go to next item.
