@@ -1322,7 +1322,7 @@ otherwise returns COMMAND unchanged."
                         'front-sticky '(read-only)
                         'agent-shell-ui-state ui-state))
                       (when collapsed
-                        (add-text-properties start end '(invisible t)))))))))))))
+                        (add-text-properties start end '(invisible t)))))))))))))))
 
 (defun agent-shell--handle-tool-call-update-streaming (state update)
   "Stream tool call UPDATE with minimal formatting."
