@@ -603,6 +603,8 @@ HEARTBEAT, and AUTHENTICATE-REQUEST-MAKER."
         (cons :prompt-capabilities nil)
         (cons :event-subscriptions nil)
         (cons :pending-requests nil)
+        (cons :debug-prompt-watch-last-check nil)
+        (cons :debug-prompt-watch-drift nil)
         (cons :usage (list (cons :total-tokens 0)
                            (cons :input-tokens 0)
                            (cons :output-tokens 0)
