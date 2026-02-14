@@ -1297,31 +1297,32 @@ otherwise returns COMMAND unchanged."
        (lambda ()
          (with-current-buffer buffer
            (shell-maker-with-auto-scroll-edit
-            (let* ((marker (agent-shell--tool-call-ensure-output-marker state tool-call-id))
-                   (ui-state (agent-shell--tool-call-output-ui-state state tool-call-id)))
-              (if (not marker)
-                  (progn
-                    (agent-shell--update-fragment
-                     :state state
-                     :block-id tool-call-id
-                     :body text
-                     :append t
-                     :navigation 'never)
-                    (agent-shell--tool-call-ensure-output-marker state tool-call-id))
-                (goto-char marker)
-                (let ((start (point)))
-                  (insert text)
-                  (let ((end (point))
-                        (collapsed (and ui-state (map-elt ui-state :collapsed))))
-                    (set-marker marker end)
-                    (add-text-properties
-                     start end
-                     (list
-                      'read-only t
-                      'front-sticky '(read-only)
-                      'agent-shell-ui-state ui-state))
-                    (when collapsed
-                      (add-text-properties start end '(invisible t))))))))))))))
+            (let ((inhibit-read-only t))
+              (let* ((marker (agent-shell--tool-call-ensure-output-marker state tool-call-id))
+                     (ui-state (agent-shell--tool-call-output-ui-state state tool-call-id)))
+                (if (not marker)
+                    (progn
+                      (agent-shell--update-fragment
+                       :state state
+                       :block-id tool-call-id
+                       :body text
+                       :append t
+                       :navigation 'never)
+                      (agent-shell--tool-call-ensure-output-marker state tool-call-id))
+                  (goto-char marker)
+                  (let ((start (point)))
+                    (insert text)
+                    (let ((end (point))
+                          (collapsed (and ui-state (map-elt ui-state :collapsed))))
+                      (set-marker marker end)
+                      (add-text-properties
+                       start end
+                       (list
+                        'read-only t
+                        'front-sticky '(read-only)
+                        'agent-shell-ui-state ui-state))
+                      (when collapsed
+                        (add-text-properties start end '(invisible t)))))))))))))
 
 (defun agent-shell--handle-tool-call-update-streaming (state update)
   "Stream tool call UPDATE with minimal formatting."
