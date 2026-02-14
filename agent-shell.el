@@ -1446,8 +1446,8 @@ otherwise returns COMMAND unchanged."
     (map-put! state :terminal-count count)
     terminal-id))
 
-(defvar agent-shell--terminal-release-grace-seconds 5
-  "Seconds to retain released terminals for late output or wait requests.")
+(defvar agent-shell--terminal-release-grace-seconds 120
+  "Seconds to retain released terminals after their last request.")
 
 (defun agent-shell--terminal-get (state terminal-id)
   "Return terminal entry for TERMINAL-ID."
@@ -1591,6 +1591,15 @@ otherwise returns COMMAND unchanged."
         (setf (map-elt terminal :waiters) nil)
         (agent-shell--terminal-put state terminal-id terminal)))))
 
+
+(defun agent-shell--terminal-touch (state terminal-id &optional terminal)
+  "Record terminal access and refresh cleanup timer when released."
+  (when-let ((entry (or terminal (agent-shell--terminal-get state terminal-id))))
+    (setf (map-elt entry :last-access) (float-time))
+    (agent-shell--terminal-put state terminal-id entry)
+    (when (map-elt entry :released)
+      (agent-shell--terminal-schedule-cleanup state terminal-id entry))))
+
 (defun agent-shell--terminal-finalize (state terminal-id)
   "Finalize TERMINAL-ID after exit when released."
   (when-let ((terminal (agent-shell--terminal-get state terminal-id)))
@@ -1598,21 +1607,29 @@ otherwise returns COMMAND unchanged."
     (when (map-elt terminal :released)
       (agent-shell--terminal-schedule-cleanup state terminal-id))))
 
-(defun agent-shell--terminal-schedule-cleanup (state terminal-id)
-  "Schedule cleanup for TERMINAL-ID after a short grace period."
+(defun agent-shell--terminal-schedule-cleanup (state terminal-id &optional terminal)
+  "Schedule cleanup for TERMINAL-ID after inactivity."
   (when-let* ((buffer (map-elt state :buffer))
-              (terminal (agent-shell--terminal-get state terminal-id)))
-    (unless (map-elt terminal :cleanup-timer)
-      (let ((timer (run-at-time
-                    agent-shell--terminal-release-grace-seconds nil
-                    (lambda ()
-                      (when (buffer-live-p buffer)
-                        (with-current-buffer buffer
-                          (when-let ((entry (agent-shell--terminal-get agent-shell--state terminal-id)))
-                            (when (map-elt entry :released)
-                              (agent-shell--terminal-remove agent-shell--state terminal-id)))))))))
-        (setf (map-elt terminal :cleanup-timer) timer)
-        (agent-shell--terminal-put state terminal-id terminal)))))
+              (entry (or terminal (agent-shell--terminal-get state terminal-id))))
+    (when (map-elt entry :released)
+      (when-let ((timer (map-elt entry :cleanup-timer)))
+        (ignore-errors (cancel-timer timer)))
+      (let ((timeout (if (numberp agent-shell--terminal-release-grace-seconds)
+                         agent-shell--terminal-release-grace-seconds
+                       120)))
+        (let ((timer (run-at-time
+                      timeout nil
+                      (lambda ()
+                        (when (buffer-live-p buffer)
+                          (with-current-buffer buffer
+                            (when-let ((current (agent-shell--terminal-get agent-shell--state terminal-id)))
+                              (let* ((last (or (map-elt current :last-access) 0))
+                                     (elapsed (- (float-time) last)))
+                                (when (and (map-elt current :released)
+                                           (>= elapsed timeout))
+                                  (agent-shell--terminal-remove agent-shell--state terminal-id))))))))))
+          (setf (map-elt entry :cleanup-timer) timer)
+          (agent-shell--terminal-put state terminal-id entry))))))
 
 (cl-defun agent-shell--on-notification (&key state notification)
   "Handle incoming notification using SHELL, STATE, and NOTIFICATION."
@@ -1913,7 +1930,9 @@ otherwise returns COMMAND unchanged."
                              (:truncated . nil)
                              (:output-byte-limit . ,output-byte-limit)
                              (:waiters . nil)
-                             (:released . nil)))
+                             (:released . nil)
+                             (:cleanup-timer . nil)
+                             (:last-access . ,(float-time))))
                  (proc (progn
                          (unless (file-directory-p default-directory)
                            (error "terminal/create cwd not found: %s" default-directory))
@@ -1977,6 +1996,7 @@ otherwise returns COMMAND unchanged."
           (let* ((output (or (agent-shell--terminal-output-text terminal) ""))
                  (truncated (if (map-elt terminal :truncated) t :false))
                  (exit-status (agent-shell--terminal-exit-status terminal)))
+            (agent-shell--terminal-touch state terminal-id terminal)
             (acp-send-response
              :client (map-elt state :client)
              :response `((:request-id . ,.id)
@@ -2006,6 +2026,7 @@ otherwise returns COMMAND unchanged."
                                  :message "Terminal not found")))))
        ((or (map-elt terminal :exit-code)
             (map-elt terminal :signal))
+        (agent-shell--terminal-touch state terminal-id terminal)
         (acp-send-response
          :client (map-elt state :client)
          :response `((:request-id . ,.id)
@@ -2013,7 +2034,8 @@ otherwise returns COMMAND unchanged."
        (t
         (let ((waiters (map-elt terminal :waiters)))
           (setf (map-elt terminal :waiters) (cons .id waiters))
-          (agent-shell--terminal-put state terminal-id terminal)))))))
+          (agent-shell--terminal-put state terminal-id terminal)
+          (agent-shell--terminal-touch state terminal-id terminal)))))))
 
 (cl-defun agent-shell--on-terminal-kill-request (&key state request)
   "Handle terminal/kill REQUEST with STATE."
@@ -2024,6 +2046,7 @@ otherwise returns COMMAND unchanged."
           (progn
             (when-let ((proc (map-elt terminal :process)))
               (ignore-errors (kill-process proc)))
+            (agent-shell--terminal-touch state terminal-id terminal)
             (acp-send-response
              :client (map-elt state :client)
              :response `((:request-id . ,.id)
