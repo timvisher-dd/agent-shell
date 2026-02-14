@@ -846,6 +846,8 @@ Flow:
               (shell-maker--current-request-id))
     (cond ((not (map-elt (agent-shell--state) :client))
            ;; Needs a client
+           (agent-shell-heartbeat-start
+            :heartbeat (map-elt agent-shell--state :heartbeat))
            (when-let ((viewport-buffer (agent-shell-viewport--buffer
                                         :shell-buffer shell-buffer
                                         :existing-only t)))
@@ -886,6 +888,8 @@ Flow:
                                ;; Consider bootstrapping/handshake complete.
                                ;; Show shell prompt.
                                (unless command
+                                 (agent-shell-heartbeat-stop
+                                  :heartbeat (map-elt agent-shell--state :heartbeat))
                                  (when (seq-empty-p (map-elt (agent-shell--state) :available-commands))
                                    ;; Setting an "available commands" placeholder fragment before
                                    ;; displaying the prompt (shell-maker-finish-output).
