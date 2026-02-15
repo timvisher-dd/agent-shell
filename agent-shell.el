@@ -121,6 +121,10 @@ When non-nil, user message sections are expanded."
   :type 'boolean
   :group 'agent-shell)
 
+;;; TODO These two new variables would be better as agent-shell-verbose.
+;;; `nil` means off but you can set it to other levels. take inspiration
+;;; from tramp-verbose.
+;;; @/opt/homebrew/Cellar/emacs/30.2/share/emacs/30.2/lisp/net/tramp-message.el.gz:60-77
 (defcustom agent-shell-logging-enabled t
   "Whether ACP logging/traffic capture is enabled for agent shells."
   :type 'boolean
@@ -1107,6 +1111,10 @@ otherwise returns COMMAND unchanged."
         (map-elt meta (symbol-name key))
       value)))
 
+;;; TODO based on the existince of agent-shell-worktree.el, i think it
+;;; would make sense to implement terminal in its own file,
+;;; agent-shell-terminal.el, since it's specialized subcomponent of the
+;;; protocol.
 (defun agent-shell--tool-call-terminal-output-data (update)
   "Return terminal output data string from UPDATE meta, if present."
   (let* ((meta (or (map-elt update '_meta)
@@ -1526,64 +1534,52 @@ looking for one that contains a toolResponse."
           (when (buffer-live-p proc-buffer)
             proc-buffer)))))))
 
-(defun agent-shell--terminal-output-text (terminal)
-  "Return terminal output text for TERMINAL."
-  (when-let ((buffer (agent-shell--terminal-output-buffer terminal)))
-    (with-current-buffer buffer
-      (buffer-substring-no-properties (point-min) (point-max)))))
-
-(defun agent-shell--terminal-truncate-output (buffer limit)
-  "Truncate BUFFER to LIMIT bytes, returning non-nil when truncated."
-  (when (and (buffer-live-p buffer) (numberp limit))
-    (with-current-buffer buffer
-      (let* ((min-bytes (position-bytes (point-min)))
-             (max-bytes (position-bytes (point-max)))
-             (bytes (- max-bytes min-bytes)))
-        (cond
-         ((<= limit 0)
-          (when (> bytes 0)
-            (erase-buffer))
-          t)
-         ((> bytes limit)
-          (let* ((excess (- bytes limit))
-                 (cutoff-byte (+ min-bytes excess))
-                 (cutoff-pos (byte-to-position cutoff-byte)))
-            (delete-region (point-min) cutoff-pos)
-            t))
-         (t nil))))))
-
-(defun agent-shell--terminal-append-output (state terminal-id chunk)
-  "Append CHUNK to TERMINAL-ID output stored in STATE."
-  (when (and chunk (not (string-empty-p chunk)))
-    (when-let ((terminal (agent-shell--terminal-get state terminal-id)))
-      (let* ((buffer (agent-shell--terminal-output-buffer terminal))
-             (limit (map-elt terminal :output-byte-limit))
-             (truncated (map-elt terminal :truncated))
-             (trimmed nil))
-        (when buffer
-          (with-current-buffer buffer
-            (let ((inhibit-read-only t))
-              (if (and (numberp limit) (<= limit 0))
-                  (progn
-                    (unless (zerop (buffer-size))
-                      (erase-buffer))
-                    (setq trimmed t))
-                (goto-char (point-max))
-                (insert chunk)
-                (when (and (numberp limit) (> limit 0))
-                  (setq trimmed (agent-shell--terminal-truncate-output buffer limit)))))))
-        (setf (map-elt terminal :truncated) (or truncated trimmed))
-        (agent-shell--terminal-put state terminal-id terminal)))))
+;; Output truncation is computed on demand for terminal/output.
+(defun agent-shell--terminal-output-slice (terminal)
+  "Return (OUTPUT . TRUNCATED) for TERMINAL respecting outputByteLimit."
+  (let ((buffer (agent-shell--terminal-output-buffer terminal))
+        (limit (map-elt terminal :output-byte-limit)))
+    (if (not (buffer-live-p buffer))
+        (cons "" nil)
+      (with-current-buffer buffer
+        (let* ((min (point-min))
+               (max (point-max))
+               (min-bytes (position-bytes min))
+               (max-bytes (position-bytes max))
+               (bytes (- max-bytes min-bytes)))
+          (cond
+           ;; FIXME Something about this feels off. It feels like what
+           ;; it's trying to do is (list (cond …)) but instead it's
+           ;; cons-ing to nil over and over?
+           ((not (numberp limit))
+            (cons (buffer-substring-no-properties min max) nil))
+           ((<= limit 0)
+            (cons "" (< 0 bytes)))
+           ((<= bytes limit)
+            (cons (buffer-substring-no-properties min max) nil))
+           (t
+            (let* ((excess (- bytes limit))
+                   (cutoff-byte (+ min-bytes excess))
+                   (cutoff-pos (or (byte-to-position cutoff-byte) min)))
+              (cons (buffer-substring-no-properties cutoff-pos max) t)))))))))
 
 (defun agent-shell--terminal-exit-status (terminal)
   "Return exit status alist for TERMINAL entry."
-  (let ((exit-code (map-elt terminal :exit-code))
-        (signal (map-elt terminal :signal)))
-    (delq nil
-          (list (when (numberp exit-code)
-                  (cons 'exitCode exit-code))
-                (when (stringp signal)
-                  (cons 'signal signal))))))
+  (when-let ((proc (map-elt terminal :process)))
+    ;; FIXME This also feels very off. Why isn't this just (or
+    ;; (process-exist-status proc) nil) or something? Also what's the deal
+    ;; with 'signal in here?
+    (let ((status (process-status proc)))
+      (cond
+       ((eq status 'exit)
+        (let ((exit-code (process-exit-status proc)))
+          (when (numberp exit-code)
+            (list (cons 'exitCode exit-code)))))
+       ((eq status 'signal)
+        (let ((signal-code (process-exit-status proc)))
+          (when (numberp signal-code)
+            (list (cons 'signal (number-to-string signal-code))))))
+       (t nil)))))
 
 (defun agent-shell--terminal-respond-waiters (state terminal-id)
   "Respond to any pending waiters for TERMINAL-ID."
@@ -1935,7 +1931,6 @@ looking for one that contains a toolResponse."
                  (terminal `((:id . ,terminal-id)
                              (:process . nil)
                              (:output-buffer . ,output-buffer)
-                             (:truncated . nil)
                              (:output-byte-limit . ,output-byte-limit)
                              (:waiters . nil)
                              (:released . nil)
@@ -1949,32 +1944,16 @@ looking for one that contains a toolResponse."
                           :buffer output-buffer
                           :command command-list
                           :noquery t
-                          :filter (lambda (_proc chunk)
-                                    (agent-shell--terminal-append-output state terminal-id chunk))
                           :sentinel (lambda (proc _event)
                                       (let ((status (process-status proc)))
                                         (when (memq status '(exit signal))
-                                          (when-let ((entry (agent-shell--terminal-get state terminal-id)))
-                                            (setf (map-elt entry :exit-code)
-                                                  (when (eq status 'exit)
-                                                    (process-exit-status proc)))
-                                            (setf (map-elt entry :signal)
-                                                  (when (eq status 'signal)
-                                                    (number-to-string (process-exit-status proc))))
-                                            (agent-shell--terminal-put state terminal-id entry)
+                                          (when (agent-shell--terminal-get state terminal-id)
                                             (agent-shell--terminal-finalize state terminal-id)))))))))
             (setf (map-elt terminal :process) proc)
             (agent-shell--terminal-put state terminal-id terminal)
             (let ((status (process-status proc)))
               (when (memq status '(exit signal))
-                (when-let ((entry (agent-shell--terminal-get state terminal-id)))
-                  (setf (map-elt entry :exit-code)
-                        (when (eq status 'exit)
-                          (process-exit-status proc)))
-                  (setf (map-elt entry :signal)
-                        (when (eq status 'signal)
-                          (number-to-string (process-exit-status proc))))
-                  (agent-shell--terminal-put state terminal-id entry)
+                (when (agent-shell--terminal-get state terminal-id)
                   (agent-shell--terminal-finalize state terminal-id))))
             (acp-send-response
              :client (map-elt state :client)
@@ -2001,8 +1980,9 @@ looking for one that contains a toolResponse."
     (let* ((terminal-id (agent-shell--meta-lookup .params 'terminalId))
            (terminal (and terminal-id (agent-shell--terminal-get state terminal-id))))
       (if terminal
-          (let* ((output (or (agent-shell--terminal-output-text terminal) ""))
-                 (truncated (if (map-elt terminal :truncated) t :false))
+          (let* ((slice (agent-shell--terminal-output-slice terminal))
+                 (output (car slice))
+                 (truncated (if (cdr slice) t :false))
                  (exit-status (agent-shell--terminal-exit-status terminal)))
             (agent-shell--terminal-touch state terminal-id terminal)
             (acp-send-response
@@ -2023,7 +2003,8 @@ looking for one that contains a toolResponse."
   "Handle terminal/wait_for_exit REQUEST with STATE."
   (let-alist request
     (let* ((terminal-id (agent-shell--meta-lookup .params 'terminalId))
-           (terminal (and terminal-id (agent-shell--terminal-get state terminal-id))))
+           (terminal (and terminal-id (agent-shell--terminal-get state terminal-id)))
+           (exit-status (and terminal (agent-shell--terminal-exit-status terminal))))
       (cond
        ((not terminal)
         (acp-send-response
@@ -2032,13 +2013,12 @@ looking for one that contains a toolResponse."
                      (:error . ,(acp-make-error
                                  :code -32002
                                  :message "Terminal not found")))))
-       ((or (map-elt terminal :exit-code)
-            (map-elt terminal :signal))
+       (exit-status
         (agent-shell--terminal-touch state terminal-id terminal)
         (acp-send-response
          :client (map-elt state :client)
          :response `((:request-id . ,.id)
-                     (:result . ,(agent-shell--terminal-exit-status terminal)))))
+                     (:result . ,exit-status))))
        (t
         (let ((waiters (map-elt terminal :waiters)))
           (setf (map-elt terminal :waiters) (cons .id waiters))
@@ -2077,8 +2057,7 @@ looking for one that contains a toolResponse."
             (agent-shell--terminal-put state terminal-id terminal)
             (when-let ((proc (map-elt terminal :process)))
               (ignore-errors (kill-process proc)))
-            (when (or (map-elt terminal :exit-code)
-                      (map-elt terminal :signal))
+            (when (agent-shell--terminal-exit-status terminal)
               (agent-shell--terminal-finalize state terminal-id))
             (acp-send-response
              :client (map-elt state :client)
