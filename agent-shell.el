@@ -1544,41 +1544,39 @@ looking for one that contains a toolResponse."
       (with-current-buffer buffer
         (let* ((min (point-min))
                (max (point-max))
-               (min-bytes (position-bytes min))
-               (max-bytes (position-bytes max))
-               (bytes (- max-bytes min-bytes)))
-          (cond
-           ;; FIXME Something about this feels off. It feels like what
-           ;; it's trying to do is (list (cond …)) but instead it's
-           ;; cons-ing to nil over and over?
-           ((not (numberp limit))
-            (cons (buffer-substring-no-properties min max) nil))
-           ((<= limit 0)
-            (cons "" (< 0 bytes)))
-           ((<= bytes limit)
-            (cons (buffer-substring-no-properties min max) nil))
-           (t
-            (let* ((excess (- bytes limit))
-                   (cutoff-byte (+ min-bytes excess))
-                   (cutoff-pos (or (byte-to-position cutoff-byte) min)))
-              (cons (buffer-substring-no-properties cutoff-pos max) t)))))))))
+               (output nil)
+               (truncated nil))
+          (if (not (numberp limit))
+              (setq output (buffer-substring-no-properties min max))
+            (let* ((min-bytes (position-bytes min))
+                   (max-bytes (position-bytes max))
+                   (bytes (- max-bytes min-bytes)))
+              (cond
+               ((<= limit 0)
+                (setq output ""
+                      truncated (< 0 bytes)))
+               ((<= bytes limit)
+                (setq output (buffer-substring-no-properties min max)))
+               (t
+                (let* ((excess (- bytes limit))
+                       (cutoff-byte (+ min-bytes excess))
+                       (cutoff-pos (or (byte-to-position cutoff-byte) min)))
+                  (setq output (buffer-substring-no-properties cutoff-pos max)
+                        truncated t))))))
+          (cons output truncated))))))
 
 (defun agent-shell--terminal-exit-status (terminal)
   "Return exit status alist for TERMINAL entry."
   (when-let ((proc (map-elt terminal :process)))
-    ;; FIXME This also feels very off. Why isn't this just (or
-    ;; (process-exist-status proc) nil) or something? Also what's the deal
-    ;; with 'signal in here?
-    (let ((status (process-status proc)))
+    (let* ((status (process-status proc))
+           (code (process-exit-status proc)))
       (cond
        ((eq status 'exit)
-        (let ((exit-code (process-exit-status proc)))
-          (when (numberp exit-code)
-            (list (cons 'exitCode exit-code)))))
+        (when (numberp code)
+          (list (cons 'exitCode code))))
        ((eq status 'signal)
-        (let ((signal-code (process-exit-status proc)))
-          (when (numberp signal-code)
-            (list (cons 'signal (number-to-string signal-code))))))
+        (when (numberp code)
+          (list (cons 'signal (number-to-string code)))))
        (t nil)))))
 
 (defun agent-shell--terminal-respond-waiters (state terminal-id)
