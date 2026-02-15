@@ -1120,6 +1120,53 @@ otherwise returns COMMAND unchanged."
         (when (stringp data)
           data)))))
 
+(defun agent-shell--tool-call-meta-response-text (update)
+  "Return tool response text from UPDATE meta, if present.
+Looks for a toolResponse entry inside any agent-specific _meta
+namespace and extracts text from it.  Handles two common shapes:
+an alist with a `content' string, or a vector of text items."
+  (let* ((meta (or (map-elt update '_meta)
+                   (map-elt update 'meta)))
+         (response (and meta
+                        (agent-shell--meta-find-tool-response meta))))
+    (cond
+     ;; Alist shape: (toolResponse (mode . "content") (content . "text..."))
+     ((and (listp response)
+           (not (vectorp response))
+           (stringp (agent-shell--meta-lookup response 'content)))
+      (agent-shell--meta-lookup response 'content))
+     ;; Vector shape: (toolResponse . [((type . "text") (text . "text..."))])
+     ((vectorp response)
+      (let* ((items (append response nil))
+             (parts (delq nil
+                          (mapcar (lambda (item)
+                                    (let ((text (agent-shell--meta-lookup item 'text)))
+                                      (when (and (stringp text)
+                                                 (not (string-empty-p text)))
+                                        text)))
+                                  items))))
+        (when parts
+          (mapconcat #'identity parts "\n\n")))))))
+
+(defun agent-shell--meta-find-tool-response (meta)
+  "Find a toolResponse value nested inside any namespace in META.
+Agents may place toolResponse under an agent-specific key (e.g.
+_meta.agentName.toolResponse).  Walk the top-level entries of META
+looking for one that contains a toolResponse."
+  (let ((found nil))
+    (cond
+     ;; Direct toolResponse at top level
+     ((setq found (agent-shell--meta-lookup meta 'toolResponse))
+      found)
+     ;; Nested under an agent namespace
+     (t
+      (cl-loop for entry in (if (listp meta) meta nil)
+               for value = (cond
+                            ((and (consp entry) (consp (cdr entry)))
+                             (agent-shell--meta-lookup (cdr entry) 'toolResponse))
+                            ((and (consp entry) (listp (cdr entry)))
+                             (agent-shell--meta-lookup (cdr entry) 'toolResponse)))
+               when value return value)))))
 
 (defun agent-shell--tool-call-content-text (content)
   "Return concatenated text from tool call CONTENT items."
@@ -1318,6 +1365,7 @@ otherwise returns COMMAND unchanged."
   (let* ((tool-call-id (map-elt update 'toolCallId))
          (status (map-elt update 'status))
          (terminal-data (agent-shell--tool-call-terminal-output-data update))
+         (meta-response (agent-shell--tool-call-meta-response-text update))
          (final (member status '("completed" "failed"))))
     (agent-shell--save-tool-call
      state
@@ -1336,11 +1384,18 @@ otherwise returns COMMAND unchanged."
          update
          (agent-shell--tool-call-output-text state tool-call-id))
         (agent-shell--tool-call-clear-output state tool-call-id)))
+     ;; Non-final meta toolResponse: output in _meta.*.toolResponse
+     ((and meta-response (not final))
+      (let ((chunk (agent-shell--tool-call-normalize-output meta-response)))
+        (when (and chunk (not (string-empty-p chunk)))
+          (agent-shell--tool-call-append-output-chunk state tool-call-id chunk)
+          (agent-shell--append-tool-call-output state tool-call-id chunk))))
      (final
       (agent-shell--handle-tool-call-update
        state
        update
-       (agent-shell--tool-call-content-text (map-elt update 'content)))
+       (or (agent-shell--tool-call-output-text state tool-call-id)
+           (agent-shell--tool-call-content-text (map-elt update 'content))))
       (agent-shell--tool-call-clear-output state tool-call-id)))))
 
 (defun agent-shell--handle-tool-call-update (state update &optional output-text)
