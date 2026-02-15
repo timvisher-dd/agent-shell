@@ -396,6 +396,62 @@ NAVIGATION controls navigability:
     (put-text-property block-start (or body-end label-right-end label-left-end) 'read-only t)
     (put-text-property block-start (or body-end label-right-end label-left-end) 'front-sticky '(read-only))))
 
+(cl-defun agent-shell-ui-update-text (&key namespace-id block-id text append create-new no-undo)
+  "Update or insert a plain text entry identified by NAMESPACE-ID and BLOCK-ID.
+
+TEXT is the string to insert or append.
+When APPEND is non-nil, append TEXT to existing entry.
+When CREATE-NEW is non-nil, always create a new entry.
+When NO-UNDO is non-nil, disable undo recording."
+  (save-mark-and-excursion
+    (let* ((inhibit-read-only t)
+           (buffer-undo-list (if no-undo t buffer-undo-list))
+           (qualified-id (format "%s-%s" namespace-id block-id))
+           (props `(agent-shell-ui-state ((:qualified-id . ,qualified-id))
+                                         read-only t
+                                         front-sticky (read-only)))
+           (match (save-mark-and-excursion
+                    (goto-char (point-max))
+                    (text-property-search-backward
+                     'agent-shell-ui-state nil
+                     (lambda (_ state)
+                       (equal (map-elt state :qualified-id) qualified-id))
+                     t))))
+      (when text
+        (cond
+         ;; Append to existing entry.
+         ((and match (not create-new) append)
+          (goto-char (prop-match-end match))
+          (insert (apply #'propertize text props))
+          (list (cons :block (list (cons :start (prop-match-beginning match))
+                                   (cons :end (point))))
+                (cons :padding (list (cons :start (prop-match-beginning match))
+                                     (cons :end (point))))))
+         ;; Replace existing entry.
+         ((and match (not create-new))
+          (let ((padding-start (save-excursion
+                                 (goto-char (prop-match-beginning match))
+                                 (skip-chars-backward "\n")
+                                 (point))))
+            (delete-region (prop-match-beginning match) (prop-match-end match))
+            (goto-char (prop-match-beginning match))
+            (insert (apply #'propertize text props))
+            (list (cons :block (list (cons :start (prop-match-beginning match))
+                                     (cons :end (point))))
+                  (cons :padding (list (cons :start padding-start)
+                                       (cons :end (point)))))))
+         ;; New entry.
+         (t
+          (goto-char (point-max))
+          (let ((padding-start (point)))
+            (insert (agent-shell-ui--required-newlines 2))
+            (let ((block-start (point)))
+              (insert (apply #'propertize text props))
+              (list (cons :block (list (cons :start block-start)
+                                       (cons :end (point))))
+                    (cons :padding (list (cons :start padding-start)
+                                         (cons :end (point)))))))))))))
+
 (defun agent-shell-ui--required-newlines (desired)
   "Return string of newlines needed to reach DESIRED before POSITION."
   (let ((context (save-mark-and-excursion

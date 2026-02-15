@@ -162,6 +162,10 @@ Returns an alist with insertion details or nil otherwise:
   (interactive)
   (unless (derived-mode-p 'agent-shell-viewport-edit-mode)
     (user-error "Not in a shell viewport buffer"))
+  (when (and (not agent-shell-deferred-initialization)
+             (not (with-current-buffer (agent-shell-viewport--shell-buffer)
+                    (map-nested-elt agent-shell--state '(:session :id)))))
+    (user-error "Session not ready... please wait"))
   (setq agent-shell-viewport--compose-snapshot nil)
   (if agent-shell-prefer-viewport-interaction
       (agent-shell-viewport-compose-send-and-wait-for-response)
@@ -754,10 +758,14 @@ For example, offer to kill associated shell session."
       ;; triggered by shell buffers attempting to kill viewport buffer.
       (let ((agent-shell-viewport--clean-up nil))
         (when-let ((shell-buffers (seq-filter (lambda (shell-buffer)
-                                                (equal (agent-shell-viewport--buffer
-                                                        :shell-buffer shell-buffer
-                                                        :existing-only t)
-                                                       (current-buffer)))
+                                                (and (equal (agent-shell-viewport--buffer
+                                                             :shell-buffer shell-buffer
+                                                             :existing-only t)
+                                                            (current-buffer))
+                                                     ;; Skip shells already shutting down (client
+                                                     ;; is nil after agent-shell--shutdown).
+                                                     (buffer-local-value 'agent-shell--state shell-buffer)
+                                                     (map-elt (buffer-local-value 'agent-shell--state shell-buffer) :client)))
                                               (agent-shell-buffers)))
                    ((y-or-n-p "Kill shell session too?")))
           (mapc (lambda (shell-buffer)
