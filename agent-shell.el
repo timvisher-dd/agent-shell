@@ -1307,58 +1307,43 @@ looking for one that contains a toolResponse."
       (setf (map-elt tool-calls tool-call-id) entry)
       (map-put! state :tool-calls tool-calls))))
 
-(defun agent-shell--with-window-end-preserved (buffer thunk)
-  "Run THUNK and keep window point at end when it was already there."
-  (let* ((windows (get-buffer-window-list buffer nil t))
-         (was-at-end (mapcar (lambda (win)
-                               (with-selected-window win
-                                 (or (eobp)
-                                     (ignore-errors
-                                       (shell-maker-point-at-last-prompt-p)))))
-                             windows)))
-    (prog1 (funcall thunk)
-      (cl-mapc (lambda (win was)
-                 (when was
-                   (with-selected-window win
-                     (goto-char (point-max)))))
-               windows was-at-end))))
-
 
 (defun agent-shell--append-tool-call-output (state tool-call-id text)
   "Append TEXT to tool call output body without formatting."
   (when (and text (not (string-empty-p text)))
-    (let ((buffer (map-elt state :buffer)))
-      (agent-shell--with-window-end-preserved
-       buffer
-       (lambda ()
-         (with-current-buffer buffer
-           (shell-maker-with-auto-scroll-edit
-            (let ((inhibit-read-only t))
-              (let* ((marker (agent-shell--tool-call-ensure-output-marker state tool-call-id))
-                     (ui-state (agent-shell--tool-call-output-ui-state state tool-call-id)))
-                (if (not marker)
-                    (progn
-                      (agent-shell--update-fragment
-                       :state state
-                       :block-id tool-call-id
-                       :body text
-                       :append t
-                       :navigation 'never)
-                      (agent-shell--tool-call-ensure-output-marker state tool-call-id))
-                  (goto-char marker)
-                  (let ((start (point)))
-                    (insert text)
-                    (let ((end (point))
-                          (collapsed (and ui-state (map-elt ui-state :collapsed))))
-                      (set-marker marker end)
-                      (add-text-properties
-                       start end
-                       (list
-                        'read-only t
-                        'front-sticky '(read-only)
-                        'agent-shell-ui-state ui-state))
-                      (when collapsed
-                        (add-text-properties start end '(invisible t)))))))))))))))
+    (with-current-buffer (map-elt state :buffer)
+      (let* ((inhibit-read-only t)
+             (was-at-end (eobp))
+             (saved-point (copy-marker (point) t))
+             (marker (agent-shell--tool-call-ensure-output-marker state tool-call-id))
+             (ui-state (agent-shell--tool-call-output-ui-state state tool-call-id)))
+        (if (not marker)
+            (progn
+              (agent-shell--update-fragment
+               :state state
+               :block-id tool-call-id
+               :body text
+               :append t
+               :navigation 'never)
+              (agent-shell--tool-call-ensure-output-marker state tool-call-id))
+          (goto-char marker)
+          (let ((start (point)))
+            (insert text)
+            (let ((end (point))
+                  (collapsed (and ui-state (map-elt ui-state :collapsed))))
+              (set-marker marker end)
+              (add-text-properties
+               start end
+               (list
+                'read-only t
+                'front-sticky '(read-only)
+                'agent-shell-ui-state ui-state))
+              (when collapsed
+                (add-text-properties start end '(invisible t))))))
+        (if was-at-end
+            (goto-char (point-max))
+          (goto-char saved-point))
+        (set-marker saved-point nil)))))
 
 (defun agent-shell--handle-tool-call-update-streaming (state update)
   "Stream tool call UPDATE with minimal formatting."
@@ -3058,8 +3043,9 @@ by default."
                  (equal (current-buffer)
                         (map-elt state :buffer)))
       (error "Editing the wrong buffer: %s" (current-buffer)))
-    (shell-maker-with-auto-scroll-edit
-     (when-let* ((range (agent-shell-ui-update-fragment
+    (let ((was-at-end (eobp))
+          (saved-point (copy-marker (point) t)))
+      (when-let* ((range (agent-shell-ui-update-fragment
                          (agent-shell-ui-make-fragment-model
                           :namespace-id (or namespace-id
                                             (map-elt state :request-count))
@@ -3104,7 +3090,11 @@ by default."
              (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
                (markdown-overlays-put))
              (widen))))
-       (run-hook-with-args 'agent-shell-section-functions range)))))
+       (run-hook-with-args 'agent-shell-section-functions range))
+      (if was-at-end
+          (goto-char (point-max))
+        (goto-char saved-point))
+      (set-marker saved-point nil))))
 
 (cl-defun agent-shell--update-text (&key state namespace-id block-id text append create-new)
   "Update plain text entry in the shell buffer.
