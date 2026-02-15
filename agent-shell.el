@@ -1536,12 +1536,13 @@ looking for one that contains a toolResponse."
 
 ;; Output truncation is computed on demand for terminal/output.
 (defun agent-shell--terminal-output-slice (terminal)
-  ;; FIXME We should enhance this docstring and/or add some comments to
-  ;; the code specifically describing what the spec demains (limits in
-  ;; bytes, character oriented in output requiring small output if byte
-  ;; limit lands within a multi-byte character). otherwise i think a lof
-  ;; this is confusing.
-  "Return (OUTPUT . TRUNCATED) for TERMINAL respecting outputByteLimit."
+  "Return (OUTPUT . TRUNCATED) for TERMINAL respecting outputByteLimit.
+
+The ACP spec defines outputByteLimit in bytes, but output must remain
+valid text. We compute byte positions with `position-bytes` and select
+the trailing slice using `byte-to-position` so we never split multibyte
+characters. When the limit is <= 0, we return empty output and mark it
+truncated if any bytes were present."
   (let ((buffer (agent-shell--terminal-output-buffer terminal))
         (limit (map-elt terminal :output-byte-limit)))
     (if (not (buffer-live-p buffer))
