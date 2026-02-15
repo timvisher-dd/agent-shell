@@ -1536,6 +1536,11 @@ looking for one that contains a toolResponse."
 
 ;; Output truncation is computed on demand for terminal/output.
 (defun agent-shell--terminal-output-slice (terminal)
+  ;; FIXME We should enhance this docstring and/or add some comments to
+  ;; the code specifically describing what the spec demains (limits in
+  ;; bytes, character oriented in output requiring small output if byte
+  ;; limit lands within a multi-byte character). otherwise i think a lof
+  ;; this is confusing.
   "Return (OUTPUT . TRUNCATED) for TERMINAL respecting outputByteLimit."
   (let ((buffer (agent-shell--terminal-output-buffer terminal))
         (limit (map-elt terminal :output-byte-limit)))
@@ -1565,18 +1570,27 @@ looking for one that contains a toolResponse."
                         truncated t))))))
           (cons output truncated))))))
 
+(defun agent-shell--terminal-signal-name (code)
+  "Return a signal name for CODE or a numeric string fallback."
+  (or (ignore-errors
+        (with-temp-buffer
+          (call-process "kill" nil t nil "-l" (number-to-string code))
+          (string-trim (buffer-substring-no-properties (point-min) (point-max)))))
+      (number-to-string code)))
+
 (defun agent-shell--terminal-exit-status (terminal)
   "Return exit status alist for TERMINAL entry."
   (when-let ((proc (map-elt terminal :process)))
+    ;; For subprocesses created via `make-process :command`, the meaningful
+    ;; terminal states are `exit` and `signal`. Network-only statuses
+    ;; (e.g., `open`, `listen`, `connect`) do not apply here.
     (let* ((status (process-status proc))
            (code (process-exit-status proc)))
       (cond
        ((eq status 'exit)
-        (when (numberp code)
-          (list (cons 'exitCode code))))
+        (list (cons 'exitCode code)))
        ((eq status 'signal)
-        (when (numberp code)
-          (list (cons 'signal (number-to-string code)))))
+        (list (cons 'signal (agent-shell--terminal-signal-name code))))
        (t nil)))))
 
 (defun agent-shell--terminal-respond-waiters (state terminal-id)
