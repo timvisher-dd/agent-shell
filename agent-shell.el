@@ -1922,7 +1922,10 @@ DESTINATION-DIR is required and must be provided."
 (cl-defun agent-shell--save-clipboard-image (&key destination-dir no-error)
   "Save clipboard image to DESTINATION-DIR.
 Returns the full path to the saved image file on success.
-When NO-ERROR is non-nil, return nil instead of signaling errors."
+When NO-ERROR is non-nil, return nil instead of signaling errors.
+
+Needs external utilities. See `agent-shell-clipboard-image-handlers'
+for details."
   (unless destination-dir
     (error "Destination-dir is required"))
   (let* ((file-path (expand-file-name
@@ -4167,6 +4170,9 @@ When PICK-SHELL is non-nil, prompt for which shell buffer to use."
 (defun agent-shell-send-clipboard-image (&optional pick-shell)
   "Paste clipboard image and insert it into `agent-shell'.
 
+Needs external utilities. See `agent-shell-clipboard-image-handlers'
+for details.
+
 The image is saved to .agent-shell/screenshots in the project root.
 The saved image file path is then inserted into the shell prompt.
 
@@ -4190,8 +4196,12 @@ When PICK-SHELL is non-nil, prompt for which shell buffer to use."
 
 (defun agent-shell-yank-dwim (&optional arg)
   "Yank or paste clipboard image into `agent-shell'.
+
 If the clipboard contains an image, save it and insert as file context.
-Otherwise, invoke `yank' with ARG as usual."
+Otherwise, invoke `yank' with ARG as usual.
+
+Needs external utilities. See `agent-shell-clipboard-image-handlers'
+for details."
   (interactive "*P")
   (let* ((screenshots-dir (expand-file-name ".agent-shell/screenshots" (agent-shell-cwd)))
          (image-path (agent-shell--save-clipboard-image :destination-dir screenshots-dir
