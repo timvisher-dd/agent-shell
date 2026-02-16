@@ -282,24 +282,33 @@ truncated if any bytes were present."
                (map-put! state :last-entry-type "tool_call"))
               ((equal (map-elt update 'sessionUpdate) "agent_thought_chunk")
                (let-alist update
-                 ;; (message "agent_thought_chunk: last-type=%s, will-append=%s"
-                 ;;          (map-elt state :last-entry-type)
-                 ;;          (equal (map-elt state :last-entry-type) "agent_thought_chunk"))
-                 (unless (equal (map-elt state :last-entry-type)
-                                "agent_thought_chunk")
-                   (map-put! state :chunked-group-count (1+ (map-elt state :chunked-group-count))))
+                 (let* ((request-id (map-elt state :request-count))
+                        (thought-request-id (map-elt state :thought-request-id))
+                        (reuse (and request-id (equal request-id thought-request-id)))
+                        (block-id (map-elt state :thought-block-id))
+                        (append nil))
+                   (unless reuse
+                     (map-put! state :chunked-group-count (1+ (map-elt state :chunked-group-count)))
+                     (setq block-id (format "%s-agent_thought_chunk"
+                                            (map-elt state :chunked-group-count)))
+                     (map-put! state :thought-request-id request-id)
+                     (map-put! state :thought-block-id block-id))
+                   (when reuse
+                     (if block-id
+                         (setq append t)
+                       (setq block-id (format "%s-agent_thought_chunk"
+                                              (map-elt state :chunked-group-count)))
+                       (map-put! state :thought-block-id block-id)))
                  (agent-shell--update-fragment
                   :state state
-                  :block-id (format "%s-agent_thought_chunk"
-                                    (map-elt state :chunked-group-count))
+                  :block-id block-id
                   :label-left  (concat
                                 agent-shell-thought-process-icon
                                 " "
                                 (propertize "Thought process" 'font-lock-face font-lock-doc-markup-face))
                   :body .content.text
-                  :append (equal (map-elt state :last-entry-type)
-                                 "agent_thought_chunk")
-                  :expanded agent-shell-thought-process-expand-by-default))
+                  :append append
+                  :expanded agent-shell-thought-process-expand-by-default)))
                (map-put! state :last-entry-type "agent_thought_chunk"))
               ((equal (map-elt update 'sessionUpdate) "agent_message_chunk")
                (unless (equal (map-elt state :last-entry-type) "agent_message_chunk")
