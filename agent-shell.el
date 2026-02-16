@@ -1147,24 +1147,33 @@ COMMAND, when present, may be a shell command string or an argv vector."
                (map-put! state :last-entry-type "tool_call"))
               ((equal (map-elt update 'sessionUpdate) "agent_thought_chunk")
                (let-alist update
-                 ;; (message "agent_thought_chunk: last-type=%s, will-append=%s"
-                 ;;          (map-elt state :last-entry-type)
-                 ;;          (equal (map-elt state :last-entry-type) "agent_thought_chunk"))
-                 (unless (equal (map-elt state :last-entry-type)
-                                "agent_thought_chunk")
-                   (map-put! state :chunked-group-count (1+ (map-elt state :chunked-group-count))))
+                 (let* ((request-id (map-elt state :request-count))
+                        (thought-request-id (map-elt state :thought-request-id))
+                        (reuse (and request-id (equal request-id thought-request-id)))
+                        (block-id (map-elt state :thought-block-id))
+                        (append nil))
+                   (unless reuse
+                     (map-put! state :chunked-group-count (1+ (map-elt state :chunked-group-count)))
+                     (setq block-id (format "%s-agent_thought_chunk"
+                                            (map-elt state :chunked-group-count)))
+                     (map-put! state :thought-request-id request-id)
+                     (map-put! state :thought-block-id block-id))
+                   (when reuse
+                     (if block-id
+                         (setq append t)
+                       (setq block-id (format "%s-agent_thought_chunk"
+                                              (map-elt state :chunked-group-count)))
+                       (map-put! state :thought-block-id block-id)))
                  (agent-shell--update-fragment
                   :state state
-                  :block-id (format "%s-agent_thought_chunk"
-                                    (map-elt state :chunked-group-count))
+                  :block-id block-id
                   :label-left  (concat
                                 agent-shell-thought-process-icon
                                 " "
                                 (propertize "Thought process" 'font-lock-face font-lock-doc-markup-face))
                   :body .content.text
-                  :append (equal (map-elt state :last-entry-type)
-                                 "agent_thought_chunk")
-                  :expanded agent-shell-thought-process-expand-by-default))
+                  :append append
+                  :expanded agent-shell-thought-process-expand-by-default)))
                (map-put! state :last-entry-type "agent_thought_chunk"))
               ((equal (map-elt update 'sessionUpdate) "agent_message_chunk")
                (unless (equal (map-elt state :last-entry-type) "agent_message_chunk")
@@ -1224,79 +1233,7 @@ COMMAND, when present, may be a shell command string or an argv vector."
                   :expanded t))
                (map-put! state :last-entry-type "plan"))
               ((equal (map-elt update 'sessionUpdate) "tool_call_update")
-               (let-alist update
-                 ;; Update stored tool call data with new status and content
-                 (agent-shell--save-tool-call
-                  state
-                  .toolCallId
-                  (append (list (cons :status (map-elt update 'status))
-                                (cons :content (map-elt update 'content)))
-                          ;; OpenCode reports bash as title in tool_call notification
-                          ;; without a command. tool_call_update notification may
-                          ;; now have the command so upgrade the title to command
-                          ;; as it's more useful.
-                          ;; See https://github.com/xenodium/agent-shell/issues/182
-                          (when-let* ((should-upgrade-title
-                                       (string= (map-nested-elt state `(:tool-calls ,.toolCallId :title))
-                                                "bash"))
-                                      (command (agent-shell--tool-call-command-to-string
-                                                (map-nested-elt update '(rawInput command)))))
-                            (list (cons :title command)))
-                          (when-let ((diff (agent-shell--make-diff-info :tool-call update)))
-                            (list (cons :diff diff)))))
-                 (agent-shell--emit-event
-                  :event 'tool-call-update
-                  :data (list (cons :tool-call-id .toolCallId)
-                              (cons :tool-call (map-nested-elt state (list :tool-calls .toolCallId)))))
-                 (let* ((diff (map-nested-elt state `(:tool-calls ,.toolCallId :diff)))
-                        (output (concat
-                                 "\n\n"
-                                 ;; TODO: Consider if there are other
-                                 ;; types of content to display.
-                                 (mapconcat (lambda (item)
-                                              (let-alist item
-                                                .content.text))
-                                            .content
-                                            "\n\n")
-                                 "\n\n"))
-                        (diff-text (agent-shell--format-diff-as-text diff))
-                        (body-text (if diff-text
-                                       (concat output
-                                               "\n\n"
-                                               "╭─────────╮\n"
-                                               "│ changes │\n"
-                                               "╰─────────╯\n\n" diff-text)
-                                     output)))
-                   ;; Log tool call to transcript when completed or failed
-                   (when (and (map-elt update 'status)
-                              (member (map-elt update 'status) '("completed" "failed")))
-                     (agent-shell--append-transcript
-                      :text (agent-shell--make-transcript-tool-call-entry
-                             :status (map-elt update 'status)
-                             :title (map-nested-elt state `(:tool-calls ,.toolCallId :title))
-                             :kind (map-nested-elt state `(:tool-calls ,.toolCallId :kind))
-                             :description (map-nested-elt state `(:tool-calls ,.toolCallId :description))
-                             :command (map-nested-elt state `(:tool-calls ,.toolCallId :command))
-                             :output body-text)
-                      :file-path agent-shell--transcript-file))
-                   ;; Hide permission after sending response.
-                   ;; Status and permission are no longer pending. User
-                   ;; likely selected one of: accepted/rejected/always.
-                   ;; Remove stale permission dialog.
-                   (when (and (map-elt update 'status)
-                              (not (equal (map-elt update 'status) "pending")))
-                     ;; block-id must be the same as the one used as
-                     ;; agent-shell--update-fragment param by "session/request_permission".
-                     (agent-shell--delete-fragment :state state :block-id (format "permission-%s" .toolCallId)))
-                   (let ((tool-call-labels (agent-shell-make-tool-call-label
-                                            state .toolCallId)))
-                     (agent-shell--update-fragment
-                      :state state
-                      :block-id .toolCallId
-                      :label-left (map-elt tool-call-labels :status)
-                      :label-right (map-elt tool-call-labels :title)
-                      :body (string-trim body-text)
-                      :expanded agent-shell-tool-use-expand-by-default))))
+               (agent-shell--handle-tool-call-update-streaming state update)
                (map-put! state :last-entry-type "tool_call_update"))
               ((equal (map-elt update 'sessionUpdate) "available_commands_update")
                (let-alist update
