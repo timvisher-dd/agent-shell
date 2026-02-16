@@ -212,9 +212,14 @@ Only returns an indicator if enabled and usage data is available."
                        ((>= percentage 37.5) "▃")
                        ((>= percentage 25) "▂")
                        ((> percentage 0) "▁")
-                       (t nil))))  ; Return nil for no usage
+                       (t nil)))  ; Return nil for no usage
+           (face (cond
+                  ((>= percentage 85) 'error)         ; Red for critical
+                  ((>= percentage 60) 'warning)       ; Yellow/orange for warning
+                  (t 'success))))                     ; Green for normal
       (when indicator
         (propertize indicator
+                    'face face
                     'help-echo (agent-shell--format-usage usage))))))
 
 (provide 'agent-shell-usage)
