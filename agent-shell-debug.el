@@ -29,6 +29,7 @@
 ;;; Code:
 
 (require 'acp)
+(require 'comint)
 (require 'map)
 (require 'shell-maker)
 (require 'subr-x)
@@ -36,6 +37,8 @@
 (declare-function agent-shell--shell-buffer "agent-shell")
 (declare-function agent-shell--state "agent-shell")
 (declare-function agent-shell-cwd "agent-shell")
+(declare-function agent-shell-previous-permission-button "agent-shell")
+(declare-function agent-shell-ui-backward-block "agent-shell-ui")
 
 (defvar agent-shell--state)
 (defvar agent-shell--transcript-file)
@@ -120,6 +123,37 @@
                  (plist-get entry :at-prompt)))
        info
        " "))))
+
+(defun agent-shell-debug-previous-item ()
+  "Report navigation candidates for previous-item in an agent shell buffer."
+  (interactive)
+  (unless (derived-mode-p 'agent-shell-mode)
+    (user-error "Not in an agent shell buffer"))
+  (let* ((current-pos (point))
+         (prompt-pos (save-excursion
+                       (when (comint-next-prompt -1)
+                         (let ((pos (point)))
+                           (when (< pos current-pos)
+                             pos)))))
+         (block-pos (save-excursion
+                      (let ((pos (agent-shell-ui-backward-block)))
+                        (when (and pos (< pos current-pos))
+                          pos))))
+         (button-pos (save-excursion
+                       (let ((pos (agent-shell-previous-permission-button)))
+                         (when (and pos (< pos current-pos))
+                           pos))))
+         (positions (delq nil (list prompt-pos block-pos button-pos)))
+         (next-pos (when positions
+                     (apply #'max positions))))
+    (message "cur=%s prompt=%s block=%s button=%s next=%s field=%S ui=%S"
+             current-pos
+             prompt-pos
+             block-pos
+             button-pos
+             next-pos
+             (and next-pos (get-text-property next-pos 'field))
+             (and next-pos (get-text-property next-pos 'agent-shell-ui-state)))))
 
 
 (defun agent-shell--debug-log-notification-error (state update err)
