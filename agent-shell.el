@@ -1086,10 +1086,11 @@ otherwise returns COMMAND unchanged."
 (defun agent-shell--tool-call-command-to-string (command)
   "Normalize tool call COMMAND to a display string.
 
-COMMAND may be a shell command string or an argv vector."
+COMMAND, when present, may be a shell command string or an argv vector."
   (cond ((stringp command) command)
         ((vectorp command)
          (combine-and-quote-strings (append command nil)))
+        ((null command) nil)
         (t (error "Unexpected tool-call command type: %S" (type-of command)))))
 
 (cl-defun agent-shell--on-notification (&key state notification)
