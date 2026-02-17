@@ -2375,6 +2375,7 @@ variable (see makunbound)"))
       ;; Initialize buffer-local shell-maker-config
       (setq-local agent-shell--shell-maker-config shell-maker-config)
       (setq-local filter-buffer-substring-function #'agent-shell--filter-buffer-substring)
+      (setq-local comint-use-prompt-regexp t)
       (agent-shell--update-header-and-mode-line)
       (add-hook 'kill-buffer-hook #'agent-shell--clean-up nil t)
       (agent-shell-ui-mode +1)
