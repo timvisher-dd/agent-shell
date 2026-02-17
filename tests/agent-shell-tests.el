@@ -198,6 +198,10 @@ DAY-OFFSET is applied to the local date before encoding."
                     "Read /path/to/agent-shell/agent-shell.el (4 - 6)")
                    "Read agent-shell.el (4 - 6)"))
 
+    ;; Test status label includes cancelled status text
+    (let ((label (agent-shell--status-label "cancelled")))
+      (should (string-match-p "cancelled" label)))
+
     ;; Test text that doesn't contain project path (should remain unchanged)
     (should (equal (agent-shell--shorten-paths
                     "Some random text without paths")

@@ -855,7 +855,9 @@ When FORCE is non-nil, skip confirmation prompt."
             :client (map-elt (agent-shell--state) :client)
             :notification (acp-make-session-cancel-notification
                            :session-id (map-nested-elt (agent-shell--state) '(:session :id))
-                           :reason "User cancelled"))))
+                           :reason "User cancelled"))
+           ;; Reflect cancellation in tool call UI.
+           (agent-shell--mark-tool-calls-cancelled (agent-shell--state))))
         (t
          (agent-shell--shutdown)
          (call-interactively #'shell-maker-interrupt))))
@@ -1437,6 +1439,25 @@ COMMAND, when present, may be a shell command string or an argv vector."
       (setf (map-elt tool-calls tool-call-id) entry)
       (map-put! state :tool-calls tool-calls))))
 
+(defun agent-shell--mark-tool-calls-cancelled (state)
+  "Mark in-flight tool-call entries in STATE as cancelled and update UI."
+  (let ((tool-calls (map-elt state :tool-calls)))
+    (when tool-calls
+      (map-do
+       (lambda (tool-call-id tool-call-data)
+         (let ((status (map-elt tool-call-data :status)))
+           (when (or (not status)
+                     (member status '("pending" "in_progress")))
+             (let ((output-text (or (agent-shell--tool-call-output-text state tool-call-id)
+                                    (agent-shell--tool-call-content-text
+                                     (map-elt tool-call-data :content)))))
+               (agent-shell--handle-tool-call-update
+                state
+                `((toolCallId . ,tool-call-id)
+                  (status . "cancelled"))
+                output-text)
+               (agent-shell--tool-call-clear-output state tool-call-id)))))
+       tool-calls))))
 
 (defun agent-shell--append-tool-call-output (state tool-call-id text)
   "Append TEXT to tool call output body without formatting."
@@ -1481,7 +1502,7 @@ COMMAND, when present, may be a shell command string or an argv vector."
          (status (map-elt update 'status))
          (terminal-data (agent-shell--tool-call-terminal-output-data update))
          (meta-response (agent-shell--tool-call-meta-response-text update))
-         (final (member status '("completed" "failed"))))
+         (final (member status '("completed" "failed" "cancelled"))))
     (agent-shell--save-tool-call
      state
      tool-call-id
@@ -1548,7 +1569,8 @@ COMMAND, when present, may be a shell command string or an argv vector."
                         output)))
       ;; Log tool call to transcript when completed or failed
       (when (and (map-elt update 'status)
-                 (member (map-elt update 'status) '("completed" "failed")))
+                 (member (map-elt update 'status)
+                         '("completed" "failed" "cancelled")))
         (agent-shell--append-transcript
          :text (agent-shell--make-transcript-tool-call-entry
                 :status (map-elt update 'status)
@@ -2157,6 +2179,7 @@ for details."
                    ("in_progress" '("in progress" warning))
                    ("completed" '("completed" success))
                    ("failed" '("failed" error))
+                   ("cancelled" '("cancelled" warning))
                    (_ '("unknown" warning))))
          (label (car config))
          (face (cadr config))
