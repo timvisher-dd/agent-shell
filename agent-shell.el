@@ -2179,7 +2179,7 @@ for details."
                    ("in_progress" '("in progress" warning))
                    ("completed" '("completed" success))
                    ("failed" '("failed" error))
-                   ("cancelled" '("cancelled" warning))
+                   ("cancelled" '("cancelled" error))
                    (_ '("unknown" warning))))
          (label (car config))
          (face (cadr config))
