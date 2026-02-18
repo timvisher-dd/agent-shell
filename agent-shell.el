@@ -1490,6 +1490,7 @@ COMMAND, when present, may be a shell command string or an argv vector."
   (when (and text (not (string-empty-p text)))
     (with-current-buffer (map-elt state :buffer)
       (let* ((inhibit-read-only t)
+             (buffer-undo-list t)
              (was-at-end (eobp))
              (saved-point (copy-marker (point) t))
              (marker (agent-shell--tool-call-ensure-output-marker state tool-call-id))
