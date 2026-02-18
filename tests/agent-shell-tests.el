@@ -1241,5 +1241,43 @@ code block content with spaces
         (should session-init-called)
         (should (equal (map-nested-elt agent-shell--state '(:session :id)) "new-session-789"))))))
 
+(ert-deftest agent-shell-previous-item-reaches-in-progress-tool-call ()
+  "Ensure previous-item lands on in-progress tool call entries without body."
+  (let* ((config (agent-shell--make-shell-maker-config
+                  :prompt "Agent> "
+                  :prompt-regexp "^Agent> "))
+         (buf (shell-maker-start config t nil t "*agent-shell-nav-test*" "Agent"))
+         (state (list (cons :buffer buf)
+                      (cons :request-count "1"))))
+    (unwind-protect
+        (with-current-buffer buf
+          (unless (derived-mode-p 'agent-shell-mode)
+            (agent-shell-mode))
+          (setq-local agent-shell--state state)
+          (setq-local comint-use-prompt-regexp t)
+          (let ((label-left (concat
+                             (agent-shell--status-label "in_progress")
+                             " "
+                             (agent-shell--add-text-properties
+                              (propertize "[execute]" 'font-lock-face 'default)
+                              'font-lock-face '(:box t)))))
+            (agent-shell--update-fragment
+             :state state
+             :block-id "tool-1"
+             :label-left label-left
+             :label-right "Run bd ready"
+             :navigation 'always))
+          (goto-char (point-max))
+          (insert "\n")
+          (agent-shell-previous-item)
+          (should (string-match-p "Run bd ready"
+                                  (buffer-substring-no-properties
+                                   (line-beginning-position)
+                                   (line-end-position))))
+          (should (= (current-column) 0)))
+      (when (buffer-live-p buf)
+        (let ((kill-buffer-query-functions nil))
+          (kill-buffer buf))))))
+
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here
