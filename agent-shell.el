@@ -888,6 +888,31 @@ END from the buffer."
                             text)
     text))
 
+(defun agent-shell--prompt-undo-enabled-p ()
+  "Return non-nil when undo should be enabled for prompt entry."
+  (and (derived-mode-p 'agent-shell-mode)
+       (not (shell-maker-busy))))
+
+(defun agent-shell--set-undo-enabled (enabled)
+  "Enable or disable undo recording for the current buffer."
+  (if enabled
+      (when (eq buffer-undo-list t)
+        (setq-local buffer-undo-list nil))
+    (when (not (eq buffer-undo-list t))
+      (setq-local buffer-undo-list t))))
+
+(defun agent-shell--refresh-undo-state ()
+  "Enable undo only while editing the active prompt."
+  (when (derived-mode-p 'agent-shell-mode)
+    (agent-shell--set-undo-enabled (agent-shell--prompt-undo-enabled-p))))
+
+(defun agent-shell--disable-undo-after-submit (&rest _args)
+  "Disable undo after prompt submission."
+  (when (derived-mode-p 'agent-shell-mode)
+    (agent-shell--set-undo-enabled nil)))
+
+(advice-add 'shell-maker-submit :after #'agent-shell--disable-undo-after-submit)
+
 (defvar-keymap agent-shell-mode-map
   :parent shell-maker-mode-map
   :doc "Keymap for `agent-shell-mode'."
@@ -1137,6 +1162,7 @@ COMMAND, when present, may be a shell command string or an argv vector."
                   :block-id (map-elt update 'toolCallId)
                   :label-left (map-elt tool-call-labels :status)
                   :label-right (map-elt tool-call-labels :title)
+                  :navigation 'always
                   :expanded agent-shell-tool-use-expand-by-default)
                  ;; Display plan as markdown block if present
                  (when-let ((plan (map-nested-elt update '(rawInput plan))))
@@ -1475,7 +1501,7 @@ COMMAND, when present, may be a shell command string or an argv vector."
                :block-id tool-call-id
                :body text
                :append t
-               :navigation 'never)
+               :navigation 'always)
               (agent-shell--tool-call-ensure-output-marker state tool-call-id))
           (goto-char marker)
           (let ((start (point)))
@@ -1597,6 +1623,7 @@ COMMAND, when present, may be a shell command string or an argv vector."
          :label-left (map-elt tool-call-labels :status)
          :label-right (map-elt tool-call-labels :title)
          :body (string-trim body-text)
+         :navigation 'always
          :expanded agent-shell-tool-use-expand-by-default)))))
 
 (cl-defun agent-shell--extract-buffer-text (&key buffer line limit)
@@ -2399,6 +2426,9 @@ variable (see makunbound)"))
       (setq-local agent-shell--shell-maker-config shell-maker-config)
       (setq-local filter-buffer-substring-function #'agent-shell--filter-buffer-substring)
       (setq-local comint-use-prompt-regexp t)
+      (setq-local buffer-undo-list t)
+      (add-hook 'pre-command-hook #'agent-shell--refresh-undo-state nil t)
+      (add-hook 'post-command-hook #'agent-shell--refresh-undo-state nil t)
       (agent-shell--update-header-and-mode-line)
       (add-hook 'kill-buffer-hook #'agent-shell--clean-up nil t)
       (agent-shell-ui-mode +1)
@@ -2509,7 +2539,8 @@ by default."
              ((with-current-buffer viewport-buffer
                 (derived-mode-p 'agent-shell-viewport-view-mode))))
     (with-current-buffer viewport-buffer
-      (let ((inhibit-read-only t))
+      (let ((inhibit-read-only t)
+            (buffer-undo-list t))
         ;; TODO: Investigate why save-restriction isn't enough
         ;; to save point. Saving (point) for now.
         (when-let* ((saved-point (point))
@@ -2555,7 +2586,8 @@ by default."
                         (map-elt state :buffer)))
       (error "Editing the wrong buffer: %s" (current-buffer)))
     (let ((was-at-end (eobp))
-          (saved-point (copy-marker (point) t)))
+          (saved-point (copy-marker (point) t))
+          (buffer-undo-list t))
       (when-let* ((range (agent-shell-ui-update-fragment
                          (agent-shell-ui-make-fragment-model
                           :namespace-id (or namespace-id
@@ -2622,7 +2654,8 @@ APPEND and CREATE-NEW control update behavior."
                ((with-current-buffer viewport-buffer
                   (derived-mode-p 'agent-shell-viewport-view-mode))))
       (with-current-buffer viewport-buffer
-        (let ((inhibit-read-only t))
+        (let ((inhibit-read-only t)
+              (buffer-undo-list t))
           (agent-shell-ui-update-text
            :namespace-id ns
            :block-id block-id
@@ -2632,17 +2665,18 @@ APPEND and CREATE-NEW control update behavior."
            :no-undo t))))
     (with-current-buffer (map-elt state :buffer)
       (shell-maker-with-auto-scroll-edit
-       (when-let* ((range (agent-shell-ui-update-text
-                           :namespace-id ns
-                           :block-id block-id
-                           :text text
-                           :append append
-                           :create-new create-new
-                           :no-undo t))
-                   (block-start (map-nested-elt range '(:block :start)))
-                   (block-end (map-nested-elt range '(:block :end))))
-         (let ((inhibit-read-only t))
-           (add-text-properties block-start block-end '(field output))))))))
+       (let ((buffer-undo-list t))
+         (when-let* ((range (agent-shell-ui-update-text
+                             :namespace-id ns
+                             :block-id block-id
+                             :text text
+                             :append append
+                             :create-new create-new
+                             :no-undo t))
+                     (block-start (map-nested-elt range '(:block :start)))
+                     (block-end (map-nested-elt range '(:block :end))))
+           (let ((inhibit-read-only t))
+             (add-text-properties block-start block-end '(field output)))))))))
 
 (defun agent-shell-next-item ()
   "Go to next item.
@@ -4912,7 +4946,8 @@ Returns an alist with insertion details or nil otherwise:
                 (insert text)
                 (setq insert-end (point))
                 (narrow-to-region insert-start insert-end)
-                (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
+                (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks)
+                      (buffer-undo-list t))
                   (markdown-overlays-put))))
             (when submit
               (shell-maker-submit)))
