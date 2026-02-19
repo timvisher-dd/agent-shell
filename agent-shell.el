@@ -4,10 +4,10 @@
 
 ;; Author: Alvaro Ramirez https://xenodium.com
 ;; URL: https://github.com/xenodium/agent-shell
-;; Version: 0.38.5
-;; Package-Requires: ((emacs "29.1") (shell-maker "0.85.1") (acp "0.10.1"))
+;; Version: 0.39.1
+;; Package-Requires: ((emacs "29.1") (shell-maker "0.85.1") (acp "0.11.1"))
 
-(defconst agent-shell--version "0.38.5")
+(defconst agent-shell--version "0.39.1")
 
 ;; This package is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -2156,8 +2156,8 @@ Set NEW-SESSION to start a separate new session.
 OUTGOING-REQUEST-DECORATOR is passed through to `acp-make-client'."
   (unless (version<= "0.85.1" shell-maker-version)
     (error "Please update shell-maker to version 0.85.1 or newer"))
-  (unless (version<= "0.10.1" acp-package-version)
-    (error "Please update acp.el to version 0.10.1 or newer"))
+  (unless (version<= "0.11.1" acp-package-version)
+    (error "Please update acp.el to version 0.11.1 or newer"))
   (when (boundp 'agent-shell--transcript-file-path-function)
     (user-error "'agent-shell--transcript-file-path-function is retired.
 
