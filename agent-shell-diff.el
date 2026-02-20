@@ -107,6 +107,7 @@ Arguments:
             (let ((inhibit-read-only t)
                   (diff-mode-read-only nil))
               (erase-buffer)
+              (agent-shell-diff-mode)
               (agent-shell-diff--insert-diff old new file diff-buffer)
               ;; Add overlays to hide scary text.
               (save-excursion
@@ -140,7 +141,6 @@ Arguments:
                     (overlay-put overlay 'display
                                  (propertize "│ changes │\n╰─────────╯\n\n" 'face face))
                     (overlay-put overlay 'evaporate t)))))
-            (agent-shell-diff-mode)
             (when bindings
               (setq header-line-format
                     (concat

@@ -2671,7 +2671,8 @@ The model contains all inputs needed to render the graphical header."
       (:mode-name . ,mode-name)
       (:directory . ,default-directory)
       (:frame-width . ,(frame-pixel-width))
-      (:font-height . ,(default-font-height))
+      (:font-height . ,(frame-char-height))
+      (:font-size . ,(font-get (face-attribute 'default :font) :size))
       (:background-mode . ,(frame-parameter nil 'background-mode))
       (:context-indicator . ,(agent-shell--context-usage-indicator))
       (:busy-indicator-frame . ,(agent-shell--busy-indicator-frame))
@@ -2731,18 +2732,25 @@ BINDINGS is a list of alists defining key bindings to display, each with:
                               (setq agent-shell--header-cache (make-hash-table :test #'equal)))
                             (map-elt agent-shell--header-cache cache-key))))
              (or cached
-                 (let* ((image-height (* 3 (map-elt header-model :font-height)))
+                 (let* ((char-height (map-elt header-model :font-height))
+                        (font-size (map-elt header-model :font-size))
+                        (has-bindings (or bindings qualifier))
+                        (image-height (* 3 char-height))
                         (image-width image-height)
-                        (text-height 25)
-                        (row-spacing 0)  ; Spacing between icon/text rows and bindings row
-                        (icon-text-row-height image-height)
-                        (bindings-row-height (if (or bindings qualifier) text-height 0))
-                        (total-height (+ icon-text-row-height bindings-row-height 10))
-                        ;; Y positions for each row (baseline positions for text)
-                        (icon-y 0)
-                        (icon-text-y text-height)
-                        ;; Bindings positioned right after the bottom text (2 text lines) plus spacing
-                        (bindings-y (+ (* 3 text-height) row-spacing))
+                        (text-height char-height)
+                        (top-padding-height (/ font-size 2))
+                        (bottom-padding-height (if has-bindings (+ text-height top-padding-height) top-padding-height))
+                        (row-spacing (if has-bindings font-size 0))
+                        (total-height (+ image-height row-spacing top-padding-height bottom-padding-height))
+                        ;; icon position
+                        (icon-x 6)
+                        (icon-y top-padding-height)
+                        ;; text position right of the icon area
+                        (icon-text-x (+ icon-x image-width 10))
+                        (icon-text-y (+ icon-y char-height (/ (- char-height font-size) 2)))
+                        ;; Bindings positioned below the icon area
+                        (bindings-x icon-x)
+                        (bindings-y (+ image-height font-size row-spacing))
                         (svg (svg-create (map-elt header-model :frame-width) total-height))
                         (icon-filename
                          (if (map-elt header-model :icon-name)
@@ -2754,11 +2762,12 @@ BINDINGS is a list of alists defining key bindings to display, each with:
                    (when (and icon-filename image-type)
                      (svg-embed svg icon-filename
                                 image-type nil
-                                :x 0 :y icon-y :width image-width :height image-height))
+                                :x icon-x :y icon-y :width image-width :height image-height))
                    ;; Top text line
                    (svg--append svg (let ((text-node (dom-node 'text
-                                                               `((x . ,(+ image-width 10))
-                                                                 (y . ,icon-text-y)))))
+                                                               `((x . ,icon-text-x)
+                                                                 (y . ,icon-text-y)
+                                                                 (font-size . ,font-size)))))
                                       ;; Agent name
                                       (dom-append-child text-node
                                                         (dom-node 'tspan
@@ -2814,13 +2823,15 @@ BINDINGS is a list of alists defining key bindings to display, each with:
                                       text-node))
                    ;; Bottom text line
                    (svg-text svg (string-remove-suffix "/" (abbreviate-file-name (map-elt header-model :directory)))
-                             :x (+ image-width 10) :y (+ icon-text-y text-height)
+                             :x icon-text-x :y (+ icon-text-y text-height (- char-height font-size))
+                             :font-size font-size
                              :fill (face-attribute 'font-lock-string-face :foreground))
                    ;; Bindings row (last row if bindings or qualifier present)
                    (when (or bindings qualifier)
                      (svg--append svg (let ((text-node (dom-node 'text
-                                                                 `((x . 0)
-                                                                   (y . ,bindings-y))))
+                                                                 `((x . ,bindings-x)
+                                                                   (y . ,bindings-y)
+                                                                   (font-size . ,font-size))))
                                             (first t))
                                         ;; Add qualifier if present
                                         (when qualifier
@@ -4029,7 +4040,7 @@ Returns a buffer object or nil."
                        ;; to get latest input.
                        (buffer-substring
                         (or (marker-position comint-accum-marker)
-	                    (process-mark (get-buffer-process (current-buffer))))
+                            (process-mark (get-buffer-process (current-buffer))))
                         (point-max)))))
     (unless (string-empty-p (string-trim input))
       input)))
