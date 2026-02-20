@@ -73,20 +73,14 @@ an alist with a `content' string, or a vector of text items."
 Agents may place toolResponse under an agent-specific key (e.g.
 _meta.agentName.toolResponse).  Walk the top-level entries of META
 looking for one that contains a toolResponse."
-  (let ((found nil))
-    (cond
-     ;; Direct toolResponse at top level
-     ((setq found (agent-shell--meta-lookup meta 'toolResponse))
-      found)
-     ;; Nested under an agent namespace
-     (t
+  (or (agent-shell--meta-lookup meta 'toolResponse)
       (cl-loop for entry in (if (listp meta) meta nil)
                for value = (cond
                             ((and (consp entry) (consp (cdr entry)))
                              (agent-shell--meta-lookup (cdr entry) 'toolResponse))
                             ((and (consp entry) (listp (cdr entry)))
                              (agent-shell--meta-lookup (cdr entry) 'toolResponse)))
-               when value return value)))))
+               when value return value)))
 
 (provide 'agent-shell-meta)
 

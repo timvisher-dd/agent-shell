@@ -5,6 +5,21 @@
 
 ;;; Code:
 
+(defun agent-shell--test-make-terminal (terminal-id output-buffer &rest overrides)
+  "Return a terminal entry for tests, applying OVERRIDES."
+  (let ((terminal `((:id . ,terminal-id)
+                    (:process . nil)
+                    (:output-buffer . ,output-buffer)
+                    (:output-byte-limit . nil)
+                    (:tool-call-ids . nil)
+                    (:waiters . nil)
+                    (:released . nil)
+                    (:cleanup-timer . nil)
+                    (:last-access . ,(float-time)))))
+    (dolist (override overrides)
+      (setf (map-elt terminal (car override)) (cdr override)))
+    terminal))
+
 (ert-deftest agent-shell--terminal-normalize-env-test ()
   "Normalize terminal env entries to NAME=VALUE strings."
   (should (equal (agent-shell--terminal-normalize-env
@@ -27,15 +42,7 @@
     (agent-shell--terminal-put
      agent-shell--state
      terminal-id
-     `((:id . ,terminal-id)
-       (:process . nil)
-       (:output-buffer . ,output-buffer)
-       (:output-byte-limit . nil)
-       (:tool-call-ids . nil)
-       (:waiters . nil)
-       (:released . nil)
-       (:cleanup-timer . nil)
-       (:last-access . ,(float-time))))
+     (agent-shell--test-make-terminal terminal-id output-buffer))
     (unwind-protect
         (cl-letf (((symbol-function 'agent-shell--make-diff-info)
                    (lambda (&rest _args) nil)))
@@ -71,7 +78,7 @@
   (let* ((buffer (get-buffer-create " *agent-shell-terminal-release-output*"))
          (terminal-id "term_release")
          (output-buffer nil)
-         (responses nil)
+         (_responses nil)
          (agent-shell--state (agent-shell--make-state :buffer buffer)))
     (map-put! agent-shell--state :client 'test-client)
     (map-put! agent-shell--state :request-count 1)
@@ -82,21 +89,13 @@
     (agent-shell--terminal-put
      agent-shell--state
      terminal-id
-     `((:id . ,terminal-id)
-       (:process . nil)
-       (:output-buffer . ,output-buffer)
-       (:output-byte-limit . nil)
-       (:tool-call-ids . nil)
-       (:waiters . nil)
-       (:released . nil)
-       (:cleanup-timer . nil)
-       (:last-access . ,(float-time))))
+     (agent-shell--test-make-terminal terminal-id output-buffer))
     (unwind-protect
         (cl-letf (((symbol-function 'agent-shell--make-diff-info)
                    (lambda (&rest _args) nil))
                   ((symbol-function 'acp-send-response)
                    (lambda (&rest args)
-                     (push args responses))))
+                     (push args _responses))))
           (with-current-buffer buffer
             (agent-shell--on-notification
              :state agent-shell--state
@@ -144,15 +143,7 @@
     (agent-shell--terminal-put
      agent-shell--state
      terminal-id
-     `((:id . ,terminal-id)
-       (:process . nil)
-       (:output-buffer . ,output-buffer)
-       (:output-byte-limit . nil)
-       (:tool-call-ids . nil)
-       (:waiters . nil)
-       (:released . nil)
-       (:cleanup-timer . nil)
-       (:last-access . ,(float-time))))
+     (agent-shell--test-make-terminal terminal-id output-buffer))
     (unwind-protect
         (cl-letf (((symbol-function 'agent-shell--make-diff-info)
                    (lambda (&rest _args) nil)))
@@ -209,46 +200,32 @@
           (agent-shell--terminal-put
            agent-shell--state
            terminal-old
-           `((:id . ,terminal-old)
-             (:process . nil)
-             (:output-buffer . ,output-buffer-old)
-             (:output-byte-limit . nil)
-             (:tool-call-ids . nil)
-             (:waiters . nil)
-             (:released . t)
-             (:cleanup-timer . nil)
-             (:last-access . ,(float-time))))
+           (agent-shell--test-make-terminal
+            terminal-old output-buffer-old (cons :released t)))
           (agent-shell--terminal-schedule-cleanup agent-shell--state terminal-old)
           (setq timer-old (map-elt (agent-shell--terminal-get agent-shell--state terminal-old)
                                    :cleanup-timer))
           (let ((terminal (agent-shell--terminal-get agent-shell--state terminal-old)))
             (setf (map-elt terminal :last-access) (- (float-time) 200))
             (agent-shell--terminal-put agent-shell--state terminal-old terminal))
-          (when (timerp timer-old)
-            (apply (timer--function timer-old) (timer--args timer-old)))
+          (should (timerp timer-old))
+          (apply (timer--function timer-old) (timer--args timer-old))
           (should-not (agent-shell--terminal-get agent-shell--state terminal-old))
 
           (setq output-buffer-new (agent-shell--terminal-make-output-buffer terminal-new))
           (agent-shell--terminal-put
            agent-shell--state
            terminal-new
-           `((:id . ,terminal-new)
-             (:process . nil)
-             (:output-buffer . ,output-buffer-new)
-             (:output-byte-limit . nil)
-             (:tool-call-ids . nil)
-             (:waiters . nil)
-             (:released . t)
-             (:cleanup-timer . nil)
-             (:last-access . ,(float-time))))
+           (agent-shell--test-make-terminal
+            terminal-new output-buffer-new (cons :released t)))
           (agent-shell--terminal-schedule-cleanup agent-shell--state terminal-new)
           (setq timer-new (map-elt (agent-shell--terminal-get agent-shell--state terminal-new)
                                    :cleanup-timer))
           (let ((terminal (agent-shell--terminal-get agent-shell--state terminal-new)))
             (setf (map-elt terminal :last-access) (float-time))
             (agent-shell--terminal-put agent-shell--state terminal-new terminal))
-          (when (timerp timer-new)
-            (apply (timer--function timer-new) (timer--args timer-new)))
+          (should (timerp timer-new))
+          (apply (timer--function timer-new) (timer--args timer-new))
           (should (agent-shell--terminal-get agent-shell--state terminal-new)))
       (when (timerp timer-old)
         (cancel-timer timer-old))
