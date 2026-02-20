@@ -2113,7 +2113,6 @@ Returns propertized labels in :status and :title propertized."
                (agent-shell--status-label (map-elt entry 'status)))
              (lambda (entry)
                (map-elt entry 'content)))
-   :separator " "
    :joiner "\n"))
 
 (cl-defun agent-shell--make-button (&key text help kind action keymap)
@@ -2879,10 +2878,20 @@ BINDINGS is a list of alists defining key bindings to display, each with:
 (defun agent-shell--image-type-to-mime (filename)
   "Convert image type from FILENAME to MIME type string.
 Returns a MIME type like \"image/png\" or \"image/jpeg\"."
-  (when-let ((type (image-supported-file-p filename)))
-    (pcase type
-      ('svg "image/svg+xml")
-      (_ (format "image/%s" type)))))
+  (let* ((type (image-supported-file-p filename))
+         (ext (downcase (or (file-name-extension filename) ""))))
+    (cond
+     (type
+      (pcase type
+        ('svg "image/svg+xml")
+        (_ (format "image/%s" type))))
+     ((member ext '("png" "gif" "webp"))
+      (format "image/%s" ext))
+     ((member ext '("jpg" "jpeg"))
+      "image/jpeg")
+     ((string= ext "svg")
+      "image/svg+xml")
+     (t nil))))
 
 (defun agent-shell--update-header-and-mode-line ()
   "Update header and mode line based on `agent-shell-header-style'."
