@@ -1261,5 +1261,80 @@ code block content with spaces
           (should (equal (map-nested-elt parsed '(params _meta systemPrompt append))
                          "extra instructions")))))))
 
+(ert-deftest agent-shell--extract-tool-parameters-test ()
+  "Test `agent-shell--extract-tool-parameters' function."
+  ;; Test nil input
+  (should (null (agent-shell--extract-tool-parameters nil)))
+
+  ;; Test empty alist
+  (should (null (agent-shell--extract-tool-parameters '())))
+
+  ;; Test with filePath parameter
+  (should (equal (agent-shell--extract-tool-parameters
+                  '((filePath . "/home/user/file.txt")))
+                 "filePath: /home/user/file.txt"))
+
+  ;; Test with multiple parameters
+  (let ((result (agent-shell--extract-tool-parameters
+                 '((filePath . "/home/user/file.txt")
+                   (offset . 100)
+                   (limit . 50)))))
+    (should (string-match-p "filePath: /home/user/file.txt" result))
+    (should (string-match-p "offset: 100" result))
+    (should (string-match-p "limit: 50" result)))
+
+  ;; Test that command and description are excluded
+  (should (null (agent-shell--extract-tool-parameters
+                 '((command . "ls -la")
+                   (description . "List files")))))
+
+  ;; Test that command/description are excluded but other params included
+  (should (equal (agent-shell--extract-tool-parameters
+                  '((command . "ls -la")
+                    (description . "List files")
+                    (workdir . "/tmp")))
+                 "workdir: /tmp"))
+
+  ;; Test with boolean value
+  (should (equal (agent-shell--extract-tool-parameters
+                  '((replaceAll . t)))
+                 "replaceAll: true"))
+
+  ;; Test with nil value (should be excluded)
+  (should (null (agent-shell--extract-tool-parameters
+                 '((filePath . nil)))))
+
+  ;; Test with empty string (should be excluded)
+  (should (null (agent-shell--extract-tool-parameters
+                 '((pattern . "")))))
+
+  ;; Test plan is excluded (shown separately)
+  (should (null (agent-shell--extract-tool-parameters
+                 '((plan . "Step 1: do something"))))))
+
+(ert-deftest agent-shell--make-transcript-tool-call-entry-test ()
+  "Test `agent-shell--make-transcript-tool-call-entry' with parameters."
+  ;; Test basic entry without parameters
+  (let ((entry (agent-shell--make-transcript-tool-call-entry
+                :status "completed"
+                :title "Read file"
+                :kind "read"
+                :output "file content here")))
+    (should (string-match-p "### Tool Call \\[completed\\]: Read file" entry))
+    (should (string-match-p "\\*\\*Tool:\\*\\* read" entry))
+    (should (string-match-p "file content here" entry))
+    (should-not (string-match-p "\\*\\*Parameters:\\*\\*" entry)))
+
+  ;; Test entry with parameters
+  (let ((entry (agent-shell--make-transcript-tool-call-entry
+                :status "completed"
+                :title "Read file"
+                :kind "read"
+                :parameters "filePath: /home/user/test.txt\noffset: 100"
+                :output "file content here")))
+    (should (string-match-p "\\*\\*Parameters:\\*\\*" entry))
+    (should (string-match-p "filePath: /home/user/test.txt" entry))
+    (should (string-match-p "offset: 100" entry))))
+
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here
