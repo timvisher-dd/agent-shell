@@ -1155,6 +1155,8 @@ COMMAND, when present, may be a shell command string or an argv vector."
                     :label-left (propertize "Proposed plan" 'font-lock-face 'font-lock-doc-markup-face)
                     :body plan
                     :expanded t)))
+               (agent-shell--terminal-link-tool-call-content
+                state (map-elt update 'toolCallId) (map-elt update 'content))
                (map-put! state :last-entry-type "tool_call"))
               ((equal (map-elt update 'sessionUpdate) "agent_thought_chunk")
                (let-alist update
@@ -1236,6 +1238,8 @@ COMMAND, when present, may be a shell command string or an argv vector."
                (map-put! state :last-entry-type "plan"))
               ((equal (map-elt update 'sessionUpdate) "tool_call_update")
                (agent-shell--handle-tool-call-update-streaming state update)
+               (agent-shell--terminal-link-tool-call-content
+                state (map-elt update 'toolCallId) (map-elt update 'content))
                (map-put! state :last-entry-type "tool_call_update"))
               ((equal (map-elt update 'sessionUpdate) "available_commands_update")
                (let-alist update
@@ -1501,7 +1505,6 @@ COMMAND, when present, may be a shell command string or an argv vector."
   "Stream tool call UPDATE with minimal formatting."
   (let* ((tool-call-id (map-elt update 'toolCallId))
          (status (map-elt update 'status))
-         (terminal-data (agent-shell--tool-call-terminal-output-data update))
          (meta-response (agent-shell--tool-call-meta-response-text update))
          (final (member status '("completed" "failed" "cancelled"))))
     (agent-shell--save-tool-call
@@ -1509,18 +1512,6 @@ COMMAND, when present, may be a shell command string or an argv vector."
      tool-call-id
      (agent-shell--tool-call-update-overrides state update nil nil))
     (cond
-     ((and terminal-data (stringp terminal-data))
-      (let* ((chunk (agent-shell--tool-call-normalize-output terminal-data)))
-        (when (and chunk (not (string-empty-p chunk)))
-          (agent-shell--tool-call-append-output-chunk state tool-call-id chunk)
-          (unless final
-            (agent-shell--append-tool-call-output state tool-call-id chunk))))
-      (when final
-        (agent-shell--handle-tool-call-update
-         state
-         update
-         (agent-shell--tool-call-output-text state tool-call-id))
-        (agent-shell--tool-call-clear-output state tool-call-id)))
      ;; Non-final meta toolResponse: output in _meta.*.toolResponse
      ((and meta-response (not final))
       (let ((chunk (agent-shell--tool-call-normalize-output meta-response)))
@@ -3437,8 +3428,7 @@ Must provide ON-INITIATED (lambda ())."
                             (version . ,agent-shell--version))
              :read-text-file-capability agent-shell-text-file-capabilities
              :write-text-file-capability agent-shell-text-file-capabilities
-             :terminal-capability t
-             :meta-capabilities '((terminal_output . t)))
+             :terminal-capability t)
    :on-success (lambda (response)
                  (with-current-buffer shell-buffer
                    (let ((acp-session-capabilities (or (map-elt response 'sessionCapabilities)
