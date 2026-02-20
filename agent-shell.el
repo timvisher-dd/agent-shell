@@ -45,6 +45,16 @@
 (require 'dired)
 (require 'json)
 (require 'map)
+
+;; Optional Flycheck APIs used for error context.
+(declare-function flycheck-overlay-errors-at "flycheck" (pos))
+(declare-function flycheck-error-pos "flycheck" (err))
+(declare-function flycheck-error-end-line "flycheck" (err))
+(declare-function flycheck-error-end-column "flycheck" (err))
+(declare-function flycheck-error-level "flycheck" (err))
+(declare-function flycheck-error-message "flycheck" (err))
+(declare-function flycheck-error-line "flycheck" (err))
+(declare-function flycheck-error-column "flycheck" (err))
 (unless (require 'markdown-overlays nil 'noerror)
   (error "Please update 'shell-maker' to v0.85.1 or newer"))
 (require 'agent-shell-anthropic)
@@ -883,9 +893,9 @@ When FORCE is non-nil, skip confirmation prompt."
       :shell-buffer (map-elt shell :buffer)))))
 
 (defun agent-shell--filter-buffer-substring (start end &optional delete)
-  "Return the buffer substring between BEG and END, after filtering.
+  "Return the buffer substring between START and END, after filtering.
 Strip the text properties `line-prefix' and `wrap-prefix' from the
-copied substring.  If DELETE is non-nil, delete the text between BEG and
+copied substring.  If DELETE is non-nil, delete the text between START and
 END from the buffer."
   (let ((text (if delete
                   (prog1 (buffer-substring start end)
@@ -1335,7 +1345,8 @@ COMMAND, when present, may be a shell command string or an argv vector."
 "))))
 
 (defun agent-shell--tool-call-update-overrides (state update &optional include-content include-diff)
-  "Build tool call overrides for UPDATE."
+  "Build tool call overrides for UPDATE in STATE.
+INCLUDE-CONTENT and INCLUDE-DIFF control optional fields."
   (let ((diff (when include-diff
                 (agent-shell--make-diff-info :tool-call update))))
     (append (list (cons :status (map-elt update 'status)))
@@ -1356,7 +1367,7 @@ COMMAND, when present, may be a shell command string or an argv vector."
               (list (cons :diff diff))))))
 
 (defun agent-shell--tool-call-append-output-chunk (state tool-call-id chunk)
-  "Append CHUNK to tool call output buffer in STATE."
+  "Append CHUNK to tool call output buffer for TOOL-CALL-ID in STATE."
   (let* ((tool-calls (map-elt state :tool-calls))
          (entry (or (map-elt tool-calls tool-call-id) (list)))
          (chunks (map-elt entry :output-chunks)))
@@ -1365,15 +1376,15 @@ COMMAND, when present, may be a shell command string or an argv vector."
     (map-put! state :tool-calls tool-calls)))
 
 (defun agent-shell--tool-call-output-marker (state tool-call-id)
-  "Return output marker for TOOL-CALL-ID."
+  "Return output marker for TOOL-CALL-ID in STATE."
   (map-nested-elt state `(:tool-calls ,tool-call-id :output-marker)))
 
 (defun agent-shell--tool-call-output-ui-state (state tool-call-id)
-  "Return cached ui state for TOOL-CALL-ID."
+  "Return cached UI state for TOOL-CALL-ID in STATE."
   (map-nested-elt state `(:tool-calls ,tool-call-id :output-ui-state)))
 
 (defun agent-shell--tool-call-set-output-marker (state tool-call-id marker)
-  "Set output MARKER for TOOL-CALL-ID."
+  "Set output MARKER for TOOL-CALL-ID in STATE."
   (let* ((tool-calls (map-elt state :tool-calls))
          (entry (or (map-elt tool-calls tool-call-id) (list))))
     (setf (map-elt entry :output-marker) marker)
@@ -1381,7 +1392,7 @@ COMMAND, when present, may be a shell command string or an argv vector."
     (map-put! state :tool-calls tool-calls)))
 
 (defun agent-shell--tool-call-set-output-ui-state (state tool-call-id ui-state)
-  "Set cached UI-STATE for TOOL-CALL-ID."
+  "Set cached UI-STATE for TOOL-CALL-ID in STATE."
   (let* ((tool-calls (map-elt state :tool-calls))
          (entry (or (map-elt tool-calls tool-call-id) (list))))
     (setf (map-elt entry :output-ui-state) ui-state)
@@ -1389,7 +1400,7 @@ COMMAND, when present, may be a shell command string or an argv vector."
     (map-put! state :tool-calls tool-calls)))
 
 (defun agent-shell--tool-call-body-range-info (state tool-call-id)
-  "Return tool call body range info for TOOL-CALL-ID."
+  "Return tool call body range info for TOOL-CALL-ID in STATE."
   (when-let ((buffer (map-elt state :buffer)))
     (with-current-buffer buffer
       (let* ((qualified-id (format "%s-%s" (map-elt state :request-count) tool-call-id))
@@ -1411,7 +1422,7 @@ COMMAND, when present, may be a shell command string or an argv vector."
                   (cons :body-range body-range))))))))
 
 (defun agent-shell--tool-call-ensure-output-marker (state tool-call-id)
-  "Ensure an output marker exists for TOOL-CALL-ID."
+  "Ensure an output marker exists for TOOL-CALL-ID in STATE."
   (let* ((buffer (map-elt state :buffer))
          (marker (agent-shell--tool-call-output-marker state tool-call-id)))
     (when (or (not (markerp marker))
@@ -1464,7 +1475,7 @@ COMMAND, when present, may be a shell command string or an argv vector."
        tool-calls))))
 
 (defun agent-shell--append-tool-call-output (state tool-call-id text)
-  "Append TEXT to tool call output body without formatting."
+  "Append TEXT to TOOL-CALL-ID output body in STATE without formatting."
   (when (and text (not (string-empty-p text)))
     (with-current-buffer (map-elt state :buffer)
       (let* ((inhibit-read-only t)
@@ -1502,7 +1513,7 @@ COMMAND, when present, may be a shell command string or an argv vector."
         (set-marker saved-point nil)))))
 
 (defun agent-shell--handle-tool-call-update-streaming (state update)
-  "Stream tool call UPDATE with minimal formatting."
+  "Stream tool call UPDATE in STATE with minimal formatting."
   (let* ((tool-call-id (map-elt update 'toolCallId))
          (status (map-elt update 'status))
          (meta-response (agent-shell--tool-call-meta-response-text update))
@@ -1541,7 +1552,8 @@ COMMAND, when present, may be a shell command string or an argv vector."
       (agent-shell--tool-call-clear-output state tool-call-id)))))
 
 (defun agent-shell--handle-tool-call-update (state update &optional output-text)
-  "Handle a tool call UPDATE immediately."
+  "Handle tool call UPDATE in STATE immediately.
+OUTPUT-TEXT overrides content-derived output."
   (let-alist update
     ;; Update stored tool call data with new status and content
     (agent-shell--save-tool-call
@@ -2213,7 +2225,7 @@ DESTINATION-DIR is required and must be provided."
 Returns the full path to the saved image file on success.
 When NO-ERROR is non-nil, return nil instead of signaling errors.
 
-Needs external utilities. See `agent-shell-clipboard-image-handlers'
+Needs external utilities.  See `agent-shell-clipboard-image-handlers'
 for details."
   (unless destination-dir
     (error "Destination-dir is required"))
@@ -4505,7 +4517,7 @@ When PICK-SHELL is non-nil, prompt for which shell buffer to use."
 (defun agent-shell-send-clipboard-image (&optional pick-shell)
   "Paste clipboard image and insert it into `agent-shell'.
 
-Needs external utilities. See `agent-shell-clipboard-image-handlers'
+Needs external utilities.  See `agent-shell-clipboard-image-handlers'
 for details.
 
 The image is saved to .agent-shell/screenshots in the project root.
@@ -4535,7 +4547,7 @@ When PICK-SHELL is non-nil, prompt for which shell buffer to use."
 If the clipboard contains an image, save it and insert as file context.
 Otherwise, invoke `yank' with ARG as usual.
 
-Needs external utilities. See `agent-shell-clipboard-image-handlers'
+Needs external utilities.  See `agent-shell-clipboard-image-handlers'
 for details."
   (interactive "*P")
   (let* ((screenshots-dir (expand-file-name ".agent-shell/screenshots" (agent-shell-cwd)))
