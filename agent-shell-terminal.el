@@ -40,7 +40,6 @@
 (declare-function agent-shell-cwd "agent-shell")
 
 (declare-function agent-shell--append-tool-call-output "agent-shell")
-(declare-function agent-shell--tool-call-append-output-chunk "agent-shell")
 
 (defvar agent-shell--state)
 
@@ -136,7 +135,6 @@
 (defun agent-shell--terminal-stream-output (state tool-call-id output)
   "Stream terminal OUTPUT into tool call TOOL-CALL-ID."
   (when (and (stringp output) (not (string-empty-p output)))
-    (agent-shell--tool-call-append-output-chunk state tool-call-id output)
     (agent-shell--append-tool-call-output state tool-call-id output)))
 
 (defun agent-shell--terminal-link-tool-call (state terminal-id tool-call-id)
