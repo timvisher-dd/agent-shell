@@ -39,6 +39,9 @@
 (declare-function agent-shell--resolve-path "agent-shell")
 (declare-function agent-shell-cwd "agent-shell")
 
+(declare-function agent-shell--append-tool-call-output "agent-shell")
+(declare-function agent-shell--tool-call-append-output-chunk "agent-shell")
+
 (defvar agent-shell--state)
 
 (defun agent-shell--terminal-next-id (state)
@@ -119,6 +122,68 @@
         (let ((proc-buffer (process-buffer proc)))
           (when (buffer-live-p proc-buffer)
             proc-buffer)))))))
+
+
+(defun agent-shell--tool-call-terminal-ids (content)
+  "Return terminal IDs from tool call CONTENT."
+  (let ((items (cond
+                ((vectorp content) (append content nil))
+                ((listp content) content)
+                (t nil))))
+    (delq nil
+          (mapcar (lambda (item)
+                    (let ((type (agent-shell--meta-lookup item 'type)))
+                      (when (and (stringp type) (string= type "terminal"))
+                        (let ((terminal-id (agent-shell--meta-lookup item 'terminalId)))
+                          (when (stringp terminal-id)
+                            terminal-id)))))
+                  items))))
+
+(defun agent-shell--terminal-stream-output (state tool-call-id output)
+  "Stream terminal OUTPUT into tool call TOOL-CALL-ID."
+  (when (and (stringp output) (not (string-empty-p output)))
+    (agent-shell--tool-call-append-output-chunk state tool-call-id output)
+    (agent-shell--append-tool-call-output state tool-call-id output)))
+
+(defun agent-shell--terminal-link-tool-call (state terminal-id tool-call-id)
+  "Associate TERMINAL-ID with TOOL-CALL-ID and stream existing output."
+  (when (and (stringp terminal-id) (stringp tool-call-id))
+    (when-let ((terminal (agent-shell--terminal-get state terminal-id)))
+      (let ((tool-call-ids (map-elt terminal :tool-call-ids)))
+        (unless (member tool-call-id tool-call-ids)
+          (setf (map-elt terminal :tool-call-ids)
+                (cons tool-call-id tool-call-ids))
+          (agent-shell--terminal-put state terminal-id terminal)
+          (when-let ((buffer (agent-shell--terminal-output-buffer terminal)))
+            (when (buffer-live-p buffer)
+              (with-current-buffer buffer
+                (let ((output (buffer-substring-no-properties (point-min) (point-max))))
+                  (agent-shell--terminal-stream-output state tool-call-id output))))))))))
+
+(defun agent-shell--terminal-link-tool-call-content (state tool-call-id content)
+  "Link TOOL-CALL-ID to any terminals referenced in CONTENT."
+  (dolist (terminal-id (agent-shell--tool-call-terminal-ids content))
+    (agent-shell--terminal-link-tool-call state terminal-id tool-call-id)))
+
+(defun agent-shell--terminal-handle-output (state terminal-id output)
+  "Handle OUTPUT from TERMINAL-ID by recording and streaming."
+  (when (and (stringp output) (not (string-empty-p output)))
+    (when-let ((terminal (agent-shell--terminal-get state terminal-id)))
+      (let ((buffer (agent-shell--terminal-output-buffer terminal)))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer
+            (let ((inhibit-read-only t))
+              (goto-char (point-max))
+              (insert output)))))
+      (agent-shell--terminal-touch state terminal-id terminal)
+      (let ((tool-call-ids (map-elt terminal :tool-call-ids)))
+        (dolist (tool-call-id tool-call-ids)
+          (agent-shell--terminal-stream-output state tool-call-id output))))))
+
+(defun agent-shell--terminal-process-filter (state terminal-id)
+  "Return a process filter streaming output for TERMINAL-ID."
+  (lambda (_proc output)
+    (agent-shell--terminal-handle-output state terminal-id output)))
 
 ;; Output truncation is computed on demand for terminal/output.
 (defun agent-shell--terminal-output-slice (terminal)
@@ -279,6 +344,8 @@ truncated if any bytes were present."
                     :label-left (propertize "Proposed plan" 'font-lock-face 'font-lock-doc-markup-face)
                     :body plan
                     :expanded t)))
+               (agent-shell--terminal-link-tool-call-content
+                state (map-elt update 'toolCallId) (map-elt update 'content))
                (map-put! state :last-entry-type "tool_call"))
               ((equal (map-elt update 'sessionUpdate) "agent_thought_chunk")
                (let-alist update
@@ -369,6 +436,8 @@ truncated if any bytes were present."
                (map-put! state :last-entry-type "plan"))
               ((equal (map-elt update 'sessionUpdate) "tool_call_update")
                (agent-shell--handle-tool-call-update-streaming state update)
+               (agent-shell--terminal-link-tool-call-content
+                state (map-elt update 'toolCallId) (map-elt update 'content))
                (map-put! state :last-entry-type "tool_call_update"))
               ((equal (map-elt update 'sessionUpdate) "available_commands_update")
                (let-alist update
@@ -540,6 +609,7 @@ truncated if any bytes were present."
                              (:process . nil)
                              (:output-buffer . ,output-buffer)
                              (:output-byte-limit . ,output-byte-limit)
+                             (:tool-call-ids . nil)
                              (:waiters . nil)
                              (:released . nil)
                              (:cleanup-timer . nil)
@@ -552,6 +622,7 @@ truncated if any bytes were present."
                           :buffer output-buffer
                           :command command-list
                           :noquery t
+                          :filter (agent-shell--terminal-process-filter state terminal-id)
                           :sentinel (lambda (proc _event)
                                       (let ((status (process-status proc)))
                                         (when (memq status '(exit signal))

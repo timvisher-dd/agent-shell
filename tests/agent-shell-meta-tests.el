@@ -5,15 +5,6 @@
 
 ;;; Code:
 
-(ert-deftest agent-shell--tool-call-terminal-output-data-test ()
-  "Extract terminal output data from meta updates."
-  (should (equal (agent-shell--tool-call-terminal-output-data
-                  '((_meta . ((terminal_output . ((data . "chunk")))))))
-                 "chunk"))
-  (should (equal (agent-shell--tool-call-terminal-output-data
-                  '((meta . (("terminal_output" . (("data" . "chunk2")))))))
-                 "chunk2")))
-
 (ert-deftest agent-shell--tool-call-meta-response-text-test ()
   "Extract toolResponse text from meta updates."
   (let ((update '((_meta . ((agent . ((toolResponse . ((content . "ok"))))))))))

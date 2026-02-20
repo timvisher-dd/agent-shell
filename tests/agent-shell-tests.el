@@ -1366,6 +1366,28 @@ code block content with spaces
     (should (string-match-p "\\*\\*Parameters:\\*\\*" entry))
     (should (string-match-p "filePath: /home/user/test.txt" entry))
     (should (string-match-p "offset: 100" entry))))
+
+(ert-deftest agent-shell--initialize-request-omits-terminal-output-meta-test ()
+  "Initialize request should not include terminal_output meta capability."
+  (let* ((buffer (get-buffer-create " *agent-shell-init-request*"))
+         (agent-shell--state (agent-shell--make-state :buffer buffer)))
+    (map-put! agent-shell--state :client 'test-client)
+    (with-current-buffer buffer
+      (erase-buffer)
+      (agent-shell-mode)
+      (setq-local agent-shell--state agent-shell--state))
+    (unwind-protect
+        (let ((captured-request nil))
+          (cl-letf (((symbol-function 'acp-send-request)
+                     (lambda (&rest args)
+                       (setq captured-request (plist-get args :request)))))
+            (agent-shell--initiate-handshake
+             :shell-buffer buffer
+             :on-initiated (lambda () nil)))
+          (should-not (map-nested-elt captured-request
+                                      '(:params clientCapabilities _meta))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
 (ert-deftest agent-shell--tool-call-update-writes-output-test ()
   "Tool call updates should write output to the shell buffer."
   (let* ((buffer (get-buffer-create " *agent-shell-tool-call-output*"))

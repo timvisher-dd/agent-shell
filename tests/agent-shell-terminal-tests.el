@@ -13,14 +13,29 @@
                  '("FOO=bar" "EMPTY="))))
 
 (ert-deftest agent-shell--terminal-output-streams-to-buffer-test ()
-  "Stream terminal output updates into the shell buffer."
+  "Stream terminal output referenced in tool call content into the shell buffer."
   (let* ((buffer (get-buffer-create " *agent-shell-terminal-output-stream*"))
+         (terminal-id "term_1")
+         (output-buffer nil)
          (agent-shell--state (agent-shell--make-state :buffer buffer)))
     (map-put! agent-shell--state :client 'test-client)
     (map-put! agent-shell--state :request-count 1)
     (with-current-buffer buffer
       (erase-buffer)
       (agent-shell-mode))
+    (setq output-buffer (agent-shell--terminal-make-output-buffer terminal-id))
+    (agent-shell--terminal-put
+     agent-shell--state
+     terminal-id
+     `((:id . ,terminal-id)
+       (:process . nil)
+       (:output-buffer . ,output-buffer)
+       (:output-byte-limit . nil)
+       (:tool-call-ids . nil)
+       (:waiters . nil)
+       (:released . nil)
+       (:cleanup-timer . nil)
+       (:last-access . ,(float-time))))
     (unwind-protect
         (cl-letf (((symbol-function 'agent-shell--make-diff-info)
                    (lambda (&rest _args) nil)))
@@ -28,14 +43,27 @@
             (agent-shell--on-notification
              :state agent-shell--state
              :notification `((method . "session/update")
-                             (params . ((update . ((sessionUpdate . "tool_call_update")
+                             (params . ((update . ((sessionUpdate . "tool_call")
                                                     (toolCallId . "call-1")
                                                     (status . "in_progress")
-                                                    (_meta . ((terminal_output . ((data . "terminal chunk")))))))))))
+                                                    (title . "Terminal")
+                                                    (kind . "tool")
+                                                    (content . [((type . "terminal")
+                                                                 (terminalId . ,terminal-id))]))))))))
+          (agent-shell--terminal-handle-output
+           agent-shell--state
+           terminal-id
+           "terminal chunk")
           (with-current-buffer buffer
+            (should (string-match-p "terminal chunk" (buffer-string))))
+          (with-current-buffer output-buffer
             (should (string-match-p "terminal chunk" (buffer-string)))))
+      (when terminal-id
+        (agent-shell--terminal-remove agent-shell--state terminal-id))
       (when (buffer-live-p buffer)
-        (kill-buffer buffer))))))
+        (kill-buffer buffer))
+      (when (buffer-live-p output-buffer)
+        (kill-buffer output-buffer)))))
 
 (ert-deftest agent-shell--terminal-create-output-test ()
   "Create a terminal and read truncated output."
