@@ -1384,8 +1384,8 @@ code block content with spaces
              :notification `((method . "session/update")
                              (params . ((update . ((sessionUpdate . "tool_call_update")
                                                     (toolCallId . "call-1")
-                                                    (status . "in_progress")
-                                                    (content . (((content . ((text . "stream chunk")))))))))))))
+                                                    (status . "completed")
+                                                    (content . [((content . ((text . "stream chunk"))))]))))))))
           (with-current-buffer buffer
             (should (string-match-p "stream chunk" (buffer-string)))))
       (when (buffer-live-p buffer)

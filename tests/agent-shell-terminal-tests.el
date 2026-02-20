@@ -12,6 +12,31 @@
                    ((name . "EMPTY"))])
                  '("FOO=bar" "EMPTY="))))
 
+(ert-deftest agent-shell--terminal-output-streams-to-buffer-test ()
+  "Stream terminal output updates into the shell buffer."
+  (let* ((buffer (get-buffer-create " *agent-shell-terminal-output-stream*"))
+         (agent-shell--state (agent-shell--make-state :buffer buffer)))
+    (map-put! agent-shell--state :client 'test-client)
+    (map-put! agent-shell--state :request-count 1)
+    (with-current-buffer buffer
+      (erase-buffer)
+      (agent-shell-mode))
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
+                   (lambda (&rest _args) nil)))
+          (with-current-buffer buffer
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :notification `((method . "session/update")
+                             (params . ((update . ((sessionUpdate . "tool_call_update")
+                                                    (toolCallId . "call-1")
+                                                    (status . "in_progress")
+                                                    (_meta . ((terminal_output . ((data . "terminal chunk")))))))))))
+          (with-current-buffer buffer
+            (should (string-match-p "terminal chunk" (buffer-string)))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))))))
+
 (ert-deftest agent-shell--terminal-create-output-test ()
   "Create a terminal and read truncated output."
   (let* ((buffer (get-buffer-create " *agent-shell-terminal-test*"))
