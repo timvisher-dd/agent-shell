@@ -73,38 +73,37 @@
   (map-put! state :terminals
             (map-delete (map-elt state :terminals) terminal-id)))
 
+(defun agent-shell--terminal-ensure-list (value)
+  "Coerce VALUE to a list, converting vectors when needed."
+  (cond
+   ((vectorp value) (append value nil))
+   ((listp value) value)
+   (t nil)))
+
 (defun agent-shell--terminal-normalize-args (args)
   "Normalize ARGS to a list of strings."
-  (cond
-   ((vectorp args) (append args nil))
-   ((listp args) args)
-   (t nil)))
+  (agent-shell--terminal-ensure-list args))
 
 (defun agent-shell--terminal-normalize-env (env)
   "Normalize ENV to a list of \"NAME=VALUE\" strings."
-  (let ((entries (cond
-                  ((vectorp env) (append env nil))
-                  ((listp env) env)
-                  (t nil))))
-    (delq nil
-          (mapcar (lambda (entry)
-                    (let ((name (agent-shell--meta-lookup entry 'name))
-                          (value (agent-shell--meta-lookup entry 'value)))
-                      (when (stringp name)
-                        (format "%s=%s" name (or value "")))))
-                  entries))))
+  (let ((entries (agent-shell--terminal-ensure-list env)))
+    (mapcan (lambda (entry)
+              (let ((name (agent-shell--meta-lookup entry 'name))
+                    (value (agent-shell--meta-lookup entry 'value)))
+                (when (stringp name)
+                  (list (format "%s=%s" name (or value ""))))))
+            entries)))
 
 (defun agent-shell--terminal-command-list (command args)
   "Return command list for terminal/create from COMMAND and ARGS."
-  (let ((args (or args nil)))
-    (cond
-     ((and (stringp command)
-           (or args (file-executable-p command)))
-      (append (list command) args))
-     ((stringp command)
-      (list shell-file-name (or shell-command-switch "-c") command))
-     (t
-      (append (list command) args)))))
+  (cond
+   ((and (stringp command)
+         (or args (file-executable-p command)))
+    (cons command args))
+   ((stringp command)
+    (list shell-file-name (or shell-command-switch "-c") command))
+   (t
+    (cons command args))))
 
 (defun agent-shell--terminal-make-output-buffer (terminal-id)
   "Create an output buffer for TERMINAL-ID."
@@ -116,28 +115,23 @@
 (defun agent-shell--terminal-output-buffer (terminal)
   "Return live output buffer for TERMINAL."
   (let ((buffer (map-elt terminal :output-buffer)))
-    (cond
-     ((buffer-live-p buffer) buffer)
-     ((when-let ((proc (map-elt terminal :process)))
-        (let ((proc-buffer (process-buffer proc)))
-          (when (buffer-live-p proc-buffer)
-            proc-buffer)))))))
+    (or (and (buffer-live-p buffer) buffer)
+        (when-let* ((proc (map-elt terminal :process))
+                    (proc-buffer (process-buffer proc)))
+          (and (buffer-live-p proc-buffer)
+               proc-buffer)))))
 
 
 (defun agent-shell--tool-call-terminal-ids (content)
   "Return terminal IDs from tool call CONTENT."
-  (let ((items (cond
-                ((vectorp content) (append content nil))
-                ((listp content) content)
-                (t nil))))
-    (delq nil
-          (mapcar (lambda (item)
-                    (let ((type (agent-shell--meta-lookup item 'type)))
-                      (when (and (stringp type) (string= type "terminal"))
-                        (let ((terminal-id (agent-shell--meta-lookup item 'terminalId)))
-                          (when (stringp terminal-id)
-                            terminal-id)))))
-                  items))))
+  (let ((items (agent-shell--terminal-ensure-list content)))
+    (mapcan (lambda (item)
+              (let ((type (agent-shell--meta-lookup item 'type)))
+                (when (and (stringp type) (string= type "terminal"))
+                  (let ((terminal-id (agent-shell--meta-lookup item 'terminalId)))
+                    (when (stringp terminal-id)
+                      (list terminal-id))))))
+            items)))
 
 (defun agent-shell--terminal-stream-output (state tool-call-id output)
   "Stream terminal OUTPUT into tool call TOOL-CALL-ID."
@@ -155,10 +149,9 @@
                 (cons tool-call-id tool-call-ids))
           (agent-shell--terminal-put state terminal-id terminal)
           (when-let ((buffer (agent-shell--terminal-output-buffer terminal)))
-            (when (buffer-live-p buffer)
-              (with-current-buffer buffer
-                (let ((output (buffer-substring-no-properties (point-min) (point-max))))
-                  (agent-shell--terminal-stream-output state tool-call-id output))))))))))
+            (with-current-buffer buffer
+              (let ((output (buffer-substring-no-properties (point-min) (point-max))))
+                (agent-shell--terminal-stream-output state tool-call-id output)))))))))
 
 (defun agent-shell--terminal-link-tool-call-content (state tool-call-id content)
   "Link TOOL-CALL-ID to any terminals referenced in CONTENT."
@@ -282,302 +275,22 @@ truncated if any bytes were present."
     (when (map-elt entry :released)
       (when-let ((timer (map-elt entry :cleanup-timer)))
         (ignore-errors (cancel-timer timer)))
-      (let ((timeout (if (numberp agent-shell--terminal-release-grace-seconds)
-                         agent-shell--terminal-release-grace-seconds
-                       120)))
-        (let ((timer (run-at-time
-                      timeout nil
-                      (lambda ()
-                        (when (buffer-live-p buffer)
-                          (with-current-buffer buffer
-                            (when-let ((current (agent-shell--terminal-get agent-shell--state terminal-id)))
-                              (let* ((last (or (map-elt current :last-access) 0))
-                                     (elapsed (- (float-time) last)))
-                                (when (and (map-elt current :released)
-                                           (<= timeout elapsed))
-                                  (agent-shell--terminal-remove agent-shell--state terminal-id))))))))))
-          (setf (map-elt entry :cleanup-timer) timer)
-          (agent-shell--terminal-put state terminal-id entry))))))
-
-(cl-defun agent-shell--on-notification (&key state notification)
-  "Handle incoming notification using SHELL, STATE, and NOTIFICATION."
-  (let-alist notification
-    (cond ((equal .method "session/update")
-           (let ((update (map-elt (map-elt notification 'params) 'update)))
-             (condition-case err
-                 (cond
-              ((equal (map-elt update 'sessionUpdate) "tool_call")
-               (agent-shell--save-tool-call
-                state
-                (map-elt update 'toolCallId)
-                (append (list (cons :title (cond
-                                            ((and (string= (map-elt update 'title) "Skill")
-                                                  (map-nested-elt update '(rawInput command)))
-                                             (format "Skill: %s"
-                                                     (map-nested-elt update '(rawInput command))))
-                                            (t
-                                             (map-elt update 'title))))
-                              (cons :status (map-elt update 'status))
-                              (cons :kind (map-elt update 'kind))
-                              (cons :command (map-nested-elt update '(rawInput command)))
-                              (cons :description (map-nested-elt update '(rawInput description)))
-                              (cons :content (map-elt update 'content)))
-                        (when-let ((diff (agent-shell--make-diff-info :tool-call update)))
-                          (list (cons :diff diff)))))
-               (agent-shell--emit-event
-                :event 'tool-call-update
-                :data (list (cons :tool-call-id (map-elt update 'toolCallId))
-                            (cons :tool-call (map-nested-elt state (list :tool-calls (map-elt update 'toolCallId))))))
-               (let ((tool-call-labels (agent-shell-make-tool-call-label
-                                        state (map-elt update 'toolCallId))))
-                 (agent-shell--update-fragment
-                  :state state
-                  :block-id (map-elt update 'toolCallId)
-                  :label-left (map-elt tool-call-labels :status)
-                  :label-right (map-elt tool-call-labels :title)
-                  :expanded agent-shell-tool-use-expand-by-default)
-                 ;; Display plan as markdown block if present
-                 (when-let ((plan (map-nested-elt update '(rawInput plan))))
-                   (agent-shell--update-fragment
-                    :state state
-                    :block-id (concat (map-elt update 'toolCallId) "-plan")
-                    :label-left (propertize "Proposed plan" 'font-lock-face 'font-lock-doc-markup-face)
-                    :body plan
-                    :expanded t)))
-               (agent-shell--terminal-link-tool-call-content
-                state (map-elt update 'toolCallId) (map-elt update 'content))
-               (map-put! state :last-entry-type "tool_call"))
-              ((equal (map-elt update 'sessionUpdate) "agent_thought_chunk")
-               (let-alist update
-                 (let* ((request-id (map-elt state :request-count))
-                        (thought-request-id (map-elt state :thought-request-id))
-                        (reuse (and request-id (equal request-id thought-request-id)))
-                        (block-id (map-elt state :thought-block-id))
-                        (append nil))
-                   (unless reuse
-                     (map-put! state :chunked-group-count (1+ (map-elt state :chunked-group-count)))
-                     (setq block-id (format "%s-agent_thought_chunk"
-                                            (map-elt state :chunked-group-count)))
-                     (map-put! state :thought-request-id request-id)
-                     (map-put! state :thought-block-id block-id))
-                   (when reuse
-                     (if block-id
-                         (setq append t)
-                       (setq block-id (format "%s-agent_thought_chunk"
-                                              (map-elt state :chunked-group-count)))
-                       (map-put! state :thought-block-id block-id)))
-                 (agent-shell--update-fragment
-                  :state state
-                  :block-id block-id
-                  :label-left  (concat
-                                agent-shell-thought-process-icon
-                                " "
-                                (propertize "Thought process" 'font-lock-face font-lock-doc-markup-face))
-                  :body .content.text
-                  :append append
-                  :expanded agent-shell-thought-process-expand-by-default)))
-               (map-put! state :last-entry-type "agent_thought_chunk"))
-              ((equal (map-elt update 'sessionUpdate) "agent_message_chunk")
-               (unless (equal (map-elt state :last-entry-type) "agent_message_chunk")
-                 (map-put! state :chunked-group-count (1+ (map-elt state :chunked-group-count)))
-                 (agent-shell--append-transcript
-                  :text (format "## Agent (%s)\n\n" (format-time-string "%F %T"))
-                  :file-path agent-shell--transcript-file))
-               (let-alist update
-                 (agent-shell--append-transcript
-                  :text .content.text
-                  :file-path agent-shell--transcript-file)
-                 (agent-shell--update-fragment
-                  :state state
-                  :block-id (format "%s-agent_message_chunk"
-                                    (map-elt state :chunked-group-count))
-                  :body .content.text
-                  :create-new (not (equal (map-elt state :last-entry-type)
-                                          "agent_message_chunk"))
-                  :append t
-                  :navigation 'never))
-               (map-put! state :last-entry-type "agent_message_chunk"))
-              ((equal (map-elt update 'sessionUpdate) "user_message_chunk")
-               (let ((new-prompt-p (not (equal (map-elt state :last-entry-type)
-                                               "user_message_chunk"))))
-                 (when new-prompt-p
-                   (map-put! state :chunked-group-count (1+ (map-elt state :chunked-group-count)))
-                   (agent-shell--append-transcript
-                    :text (format "## User (%s)\n\n" (format-time-string "%F %T"))
-                    :file-path agent-shell--transcript-file))
-                 (let-alist update
-                   (agent-shell--append-transcript
-                    :text (format "> %s\n" .content.text)
-                    :file-path agent-shell--transcript-file)
-                   (agent-shell--update-text
-                    :state state
-                    :block-id (format "%s-user_message_chunk"
-                                      (map-elt state :chunked-group-count))
-                    :text (if new-prompt-p
-                              (concat (propertize
-                                       (map-nested-elt
-                                        state '(:agent-config :shell-prompt))
-                                       'font-lock-face 'comint-highlight-prompt)
-                                      (propertize .content.text
-                                                  'font-lock-face 'comint-highlight-input))
-                            (propertize .content.text
-                                        'font-lock-face 'comint-highlight-input))
-                    :create-new new-prompt-p
-                    :append t)))
-               (map-put! state :last-entry-type "user_message_chunk"))
-              ((equal (map-elt update 'sessionUpdate) "plan")
-               (let-alist update
-                 (agent-shell--update-fragment
-                  :state state
-                  :block-id "plan"
-                  :label-left (propertize "Plan" 'font-lock-face 'font-lock-doc-markup-face)
-                  :body (agent-shell--format-plan .entries)
-                  :expanded t))
-               (map-put! state :last-entry-type "plan"))
-              ((equal (map-elt update 'sessionUpdate) "tool_call_update")
-               (agent-shell--handle-tool-call-update-streaming state update)
-               (agent-shell--terminal-link-tool-call-content
-                state (map-elt update 'toolCallId) (map-elt update 'content))
-               (map-put! state :last-entry-type "tool_call_update"))
-              ((equal (map-elt update 'sessionUpdate) "available_commands_update")
-               (let-alist update
-                 (map-put! state :available-commands (map-elt update 'availableCommands))
-                 (agent-shell--update-fragment
-                  :state state
-                  :namespace-id "bootstrapping"
-                  :block-id "available_commands_update"
-                  :label-left (propertize "Available commands" 'font-lock-face 'font-lock-doc-markup-face)
-                  :body (agent-shell--format-available-commands (map-elt update 'availableCommands))))
-               (map-put! state :last-entry-type "available_commands_update"))
-              ((equal (map-elt update 'sessionUpdate) "current_mode_update")
-               (let ((updated-session (map-elt state :session))
-                     (new-mode-id (map-elt update 'currentModeId)))
-                 (map-put! updated-session :mode-id new-mode-id)
-                 (map-put! state :session updated-session)
-                 (message "Session mode: %s"
-                          (agent-shell--resolve-session-mode-name
-                           new-mode-id
-                           (agent-shell--get-available-modes state)))
-                 ;; Note: No need to set :last-entry-type as no text was inserted.
-                 (agent-shell--update-header-and-mode-line)))
-              ((equal (map-elt update 'sessionUpdate) "config_option_update")
-               ;; Silently handle config option updates (e.g., from set_model/set_mode)
-               ;; These are informational notifications that don't require user-visible output
-               ;; Note: No need to set :last-entry-type as no text was inserted.
-               nil)
-              ((equal (map-elt update 'sessionUpdate) "usage_update")
-               ;; Extract context window and cost information
-               (agent-shell--update-usage-from-notification :state state :update update)
-               ;; Update header to reflect new context usage indicator
-               (agent-shell--update-header-and-mode-line)
-               ;; Note: This is session-level state, no need to set :last-entry-type
-               nil)
-              (t
-               (agent-shell--update-fragment
-                :state state
-                :block-id "Session Update - fallback"
-                :body (format "%s" notification)
-                :create-new t
-                :navigation 'never)
-               (map-put! state :last-entry-type nil)))
-               (error
-                (unless (eq (car err) 'quit)
-                  (agent-shell--debug-log-notification-error state update err))
-                (signal (car err) (cdr err))))))
-          (t
-           (agent-shell--update-fragment
-            :state state
-            :block-id "Notification - fallback"
-            :body (format "Unhandled notification (%s) and include:
-
-```json
-%s
-```"
-                          (agent-shell-ui-add-action-to-text
-                           "please file a feature request"
-                           (lambda ()
-                             (interactive)
-                             (browse-url "https://github.com/xenodium/agent-shell/issues/new/choose"))
-                           (lambda ()
-                             (message "Press RET to open URL"))
-                           'link)
-                          (with-temp-buffer
-                            (insert (json-serialize notification))
-                            (json-pretty-print (point-min) (point-max))
-                            (buffer-string)))
-            :create-new t
-            :navigation 'never)
-           (map-put! state :last-entry-type nil)))))
-
-(cl-defun agent-shell--on-request (&key state request)
-  "Handle incoming request using SHELL, STATE, and REQUEST."
-  (let-alist request
-    (cond ((equal .method "session/request_permission")
-           (agent-shell--save-tool-call
-            state .params.toolCall.toolCallId
-            (append (list (cons :title .params.toolCall.title)
-                          (cons :status .params.toolCall.status)
-                          (cons :kind .params.toolCall.kind)
-                          (cons :permission-request-id .id))
-                    (when-let ((diff (agent-shell--make-diff-info
-                                      :tool-call .params.toolCall)))
-                      (list (cons :diff diff)))))
-           (agent-shell--update-fragment
-            :state state
-            ;; block-id must be the same as the one used
-            ;; in agent-shell--delete-fragment param.
-            :block-id (format "permission-%s" .params.toolCall.toolCallId)
-            :body (with-current-buffer (map-elt state :buffer)
-                    (agent-shell--make-tool-call-permission-text
-                     :request request
-                     :client (map-elt state :client)
-                     :state state))
-            :expanded t
-            :navigation 'never)
-           (agent-shell-jump-to-latest-permission-button-row)
-           (when-let (((map-elt state :buffer))
-                      (viewport-buffer (agent-shell-viewport--buffer
-                                        :shell-buffer (map-elt state :buffer)
-                                        :existing-only t)))
-             (with-current-buffer viewport-buffer
-               (agent-shell-jump-to-latest-permission-button-row)))
-           (map-put! state :last-entry-type "session/request_permission"))
-          ((equal .method "fs/read_text_file")
-           (agent-shell--on-fs-read-text-file-request
-            :state state
-            :request request))
-          ((equal .method "fs/write_text_file")
-           (agent-shell--on-fs-write-text-file-request
-            :state state
-            :request request))
-          ((equal .method "terminal/create")
-           (agent-shell--on-terminal-create-request
-            :state state
-            :request request))
-          ((equal .method "terminal/output")
-           (agent-shell--on-terminal-output-request
-            :state state
-            :request request))
-          ((equal .method "terminal/wait_for_exit")
-           (agent-shell--on-terminal-wait-for-exit-request
-            :state state
-            :request request))
-          ((equal .method "terminal/kill")
-           (agent-shell--on-terminal-kill-request
-            :state state
-            :request request))
-          ((equal .method "terminal/release")
-           (agent-shell--on-terminal-release-request
-            :state state
-            :request request))
-          (t
-           (agent-shell--update-fragment
-            :state state
-            :block-id "Unhandled Incoming Request"
-            :body (format "⚠ Unhandled incoming request: \"%s\"" .method)
-            :create-new t
-            :navigation 'never)
-           (map-put! state :last-entry-type nil)))))
+      (let* ((timeout (if (numberp agent-shell--terminal-release-grace-seconds)
+                          agent-shell--terminal-release-grace-seconds
+                        120))
+             (timer (run-at-time
+                     timeout nil
+                     (lambda ()
+                       (when (buffer-live-p buffer)
+                         (with-current-buffer buffer
+                           (when-let ((current (agent-shell--terminal-get agent-shell--state terminal-id)))
+                             (let* ((last (or (map-elt current :last-access) 0))
+                                    (elapsed (- (float-time) last)))
+                               (when (and (map-elt current :released)
+                                          (<= timeout elapsed))
+                                 (agent-shell--terminal-remove agent-shell--state terminal-id))))))))))
+        (setf (map-elt entry :cleanup-timer) timer)
+        (agent-shell--terminal-put state terminal-id entry)))))
 
 (cl-defun agent-shell--on-terminal-create-request (&key state request)
   "Handle terminal/create REQUEST with STATE."
