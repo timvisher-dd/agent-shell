@@ -54,7 +54,7 @@
   "Seconds to retain released terminals after their last request.")
 
 (defun agent-shell--terminal-get (state terminal-id)
-  "Return terminal entry for TERMINAL-ID."
+  "Return terminal entry for TERMINAL-ID in STATE."
   (map-nested-elt state `(:terminals ,terminal-id)))
 
 (defun agent-shell--terminal-put (state terminal-id terminal)
@@ -133,12 +133,12 @@
             items)))
 
 (defun agent-shell--terminal-stream-output (state tool-call-id output)
-  "Stream terminal OUTPUT into tool call TOOL-CALL-ID."
+  "Stream terminal OUTPUT into tool call TOOL-CALL-ID in STATE."
   (when (and (stringp output) (not (string-empty-p output)))
     (agent-shell--append-tool-call-output state tool-call-id output)))
 
 (defun agent-shell--terminal-link-tool-call (state terminal-id tool-call-id)
-  "Associate TERMINAL-ID with TOOL-CALL-ID and stream existing output."
+  "Associate TERMINAL-ID with TOOL-CALL-ID in STATE and stream existing output."
   (when (and (stringp terminal-id) (stringp tool-call-id))
     (when-let ((terminal (agent-shell--terminal-get state terminal-id)))
       (let ((tool-call-ids (map-elt terminal :tool-call-ids)))
@@ -152,12 +152,12 @@
                 (agent-shell--terminal-stream-output state tool-call-id output)))))))))
 
 (defun agent-shell--terminal-link-tool-call-content (state tool-call-id content)
-  "Link TOOL-CALL-ID to any terminals referenced in CONTENT."
+  "Link TOOL-CALL-ID to any terminals referenced in CONTENT for STATE."
   (dolist (terminal-id (agent-shell--tool-call-terminal-ids content))
     (agent-shell--terminal-link-tool-call state terminal-id tool-call-id)))
 
 (defun agent-shell--terminal-handle-output (state terminal-id output)
-  "Handle OUTPUT from TERMINAL-ID by recording and streaming."
+  "Handle OUTPUT from TERMINAL-ID in STATE by recording and streaming."
   (when (and (stringp output) (not (string-empty-p output)))
     (when-let ((terminal (agent-shell--terminal-get state terminal-id)))
       (let ((buffer (agent-shell--terminal-output-buffer terminal)))
@@ -172,7 +172,7 @@
           (agent-shell--terminal-stream-output state tool-call-id output))))))
 
 (defun agent-shell--terminal-process-filter (state terminal-id)
-  "Return a process filter streaming output for TERMINAL-ID."
+  "Return a process filter streaming output for TERMINAL-ID in STATE."
   (lambda (_proc output)
     (agent-shell--terminal-handle-output state terminal-id output)))
 
@@ -181,9 +181,9 @@
   "Return (OUTPUT . TRUNCATED) for TERMINAL respecting outputByteLimit.
 
 The ACP spec defines outputByteLimit in bytes, but output must remain
-valid text. We compute byte positions with `position-bytes` and select
+valid text.  We compute byte positions with `position-bytes` and select
 the trailing slice using `byte-to-position` so we never split multibyte
-characters. When the limit is <= 0, we return empty output and mark it
+characters.  When the limit is <= 0, we return empty output and mark it
 truncated if any bytes were present."
   (let ((buffer (agent-shell--terminal-output-buffer terminal))
         (limit (map-elt terminal :output-byte-limit)))
@@ -237,7 +237,7 @@ truncated if any bytes were present."
        (t nil)))))
 
 (defun agent-shell--terminal-respond-waiters (state terminal-id)
-  "Respond to any pending waiters for TERMINAL-ID."
+  "Respond to any pending waiters for TERMINAL-ID in STATE."
   (when-let ((terminal (agent-shell--terminal-get state terminal-id)))
     (let ((waiters (map-elt terminal :waiters)))
       (when waiters
@@ -252,7 +252,8 @@ truncated if any bytes were present."
 
 
 (defun agent-shell--terminal-touch (state terminal-id &optional terminal)
-  "Record terminal access and refresh cleanup timer when released."
+  "Record terminal access for TERMINAL-ID in STATE.
+Refresh cleanup timer when released.  Use TERMINAL when already looked up."
   (when-let ((entry (or terminal (agent-shell--terminal-get state terminal-id))))
     (setf (map-elt entry :last-access) (float-time))
     (agent-shell--terminal-put state terminal-id entry)
@@ -260,14 +261,15 @@ truncated if any bytes were present."
       (agent-shell--terminal-schedule-cleanup state terminal-id entry))))
 
 (defun agent-shell--terminal-finalize (state terminal-id)
-  "Finalize TERMINAL-ID after exit when released."
+  "Finalize TERMINAL-ID in STATE after exit when released."
   (when-let ((terminal (agent-shell--terminal-get state terminal-id)))
     (agent-shell--terminal-respond-waiters state terminal-id)
     (when (map-elt terminal :released)
       (agent-shell--terminal-schedule-cleanup state terminal-id))))
 
 (defun agent-shell--terminal-schedule-cleanup (state terminal-id &optional terminal)
-  "Schedule cleanup for TERMINAL-ID after inactivity."
+  "Schedule cleanup for TERMINAL-ID in STATE after inactivity.
+Use TERMINAL when already looked up."
   (when-let* ((buffer (map-elt state :buffer))
               (entry (or terminal (agent-shell--terminal-get state terminal-id))))
     (when (map-elt entry :released)
@@ -304,7 +306,7 @@ truncated if any bytes were present."
                (output-byte-limit (let ((limit (agent-shell--meta-lookup params 'outputByteLimit)))
                                     (when (numberp limit) limit))))
           (unless (stringp command)
-            (error "terminal/create missing command"))
+            (error "Terminal/create missing command"))
           (let* ((terminal-id (agent-shell--terminal-next-id state))
                  (output-buffer (agent-shell--terminal-make-output-buffer terminal-id))
                  (default-directory (file-name-as-directory
@@ -327,7 +329,7 @@ truncated if any bytes were present."
                              (:last-access . ,(float-time))))
                  (proc (progn
                          (unless (file-directory-p default-directory)
-                           (error "terminal/create cwd not found: %s" default-directory))
+                           (error "Terminal/create cwd not found: %s" default-directory))
                          (make-process
                           :name (format "agent-shell-terminal-%s" terminal-id)
                           :buffer output-buffer
