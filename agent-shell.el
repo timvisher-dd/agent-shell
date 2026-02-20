@@ -59,11 +59,13 @@
 (require 'agent-shell-heartbeat)
 (require 'agent-shell-active-message)
 (require 'agent-shell-mistral)
+(require 'agent-shell-meta)
 (require 'agent-shell-openai)
 (require 'agent-shell-opencode)
 (require 'agent-shell-pi)
 (require 'agent-shell-project)
 (require 'agent-shell-qwen)
+(require 'agent-shell-terminal)
 (require 'agent-shell-usage)
 (require 'agent-shell-worktree)
 (require 'agent-shell-ui)
@@ -575,6 +577,8 @@ OUTGOING-REQUEST-DECORATOR (passed through to `acp-make-client')."
         (cons :chunked-group-count 0)
         (cons :request-count 0)
         (cons :tool-calls nil)
+        (cons :terminals nil)
+        (cons :terminal-count 0)
         (cons :available-commands nil)
         (cons :available-modes nil)
         (cons :supports-session-list nil)
@@ -904,7 +908,7 @@ END from the buffer."
   "C-c C-o" #'agent-shell-other-buffer
   "<remap> <yank>" #'agent-shell-yank-dwim)
 
-(shell-maker-define-major-mode (agent-shell--make-shell-maker-config) agent-shell-mode-map)
+(shell-maker-define-major-mode (agent-shell--make-shell-maker-config) 'agent-shell-mode-map)
 
 (cl-defun agent-shell--handle (&key command shell-buffer)
   "Handle SHELL-BUFFER COMMAND (and lazy initialize the ACP stack).
@@ -1422,6 +1426,26 @@ COMMAND, when present, may be a shell command string or an argv vector."
             :request request))
           ((equal .method "fs/write_text_file")
            (agent-shell--on-fs-write-text-file-request
+            :state state
+            :request request))
+          ((equal .method "terminal/create")
+           (agent-shell--on-terminal-create-request
+            :state state
+            :request request))
+          ((equal .method "terminal/output")
+           (agent-shell--on-terminal-output-request
+            :state state
+            :request request))
+          ((equal .method "terminal/wait_for_exit")
+           (agent-shell--on-terminal-wait-for-exit-request
+            :state state
+            :request request))
+          ((equal .method "terminal/kill")
+           (agent-shell--on-terminal-kill-request
+            :state state
+            :request request))
+          ((equal .method "terminal/release")
+           (agent-shell--on-terminal-release-request
             :state state
             :request request))
           (t
@@ -3188,7 +3212,9 @@ Must provide ON-INITIATED (lambda ())."
                             (title . "Emacs Agent Shell")
                             (version . ,agent-shell--version))
              :read-text-file-capability agent-shell-text-file-capabilities
-             :write-text-file-capability agent-shell-text-file-capabilities)
+             :write-text-file-capability agent-shell-text-file-capabilities
+             :terminal-capability t
+             :meta-capabilities '((terminal_output . t)))
    :on-success (lambda (response)
                  (with-current-buffer shell-buffer
                    (let ((acp-session-capabilities (or (map-elt response 'sessionCapabilities)

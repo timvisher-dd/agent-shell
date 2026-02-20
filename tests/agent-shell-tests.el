@@ -1,6 +1,7 @@
 ;;; agent-shell-tests.el --- Tests for agent-shell -*- lexical-binding: t; -*-
 
 (require 'ert)
+(require 'keymap)
 (require 'agent-shell)
 
 ;;; Code:
@@ -1335,6 +1336,30 @@ code block content with spaces
     (should (string-match-p "\\*\\*Parameters:\\*\\*" entry))
     (should (string-match-p "filePath: /home/user/test.txt" entry))
     (should (string-match-p "offset: 100" entry))))
+(ert-deftest agent-shell--tool-call-update-writes-output-test ()
+  "Tool call updates should write output to the shell buffer."
+  (let* ((buffer (get-buffer-create " *agent-shell-tool-call-output*"))
+         (agent-shell--state (agent-shell--make-state :buffer buffer)))
+    (map-put! agent-shell--state :client 'test-client)
+    (map-put! agent-shell--state :request-count 1)
+    (with-current-buffer buffer
+      (erase-buffer)
+      (agent-shell-mode))
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
+                   (lambda (&rest _args) nil)))
+          (with-current-buffer buffer
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :notification `((method . "session/update")
+                             (params . ((update . ((sessionUpdate . "tool_call_update")
+                                                    (toolCallId . "call-1")
+                                                    (status . "in_progress")
+                                                    (content . (((content . ((text . "stream chunk")))))))))))))
+          (with-current-buffer buffer
+            (should (string-match-p "stream chunk" (buffer-string)))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
 
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here
