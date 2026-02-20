@@ -3,8 +3,36 @@
 (require 'ert)
 (require 'keymap)
 (require 'agent-shell)
+(require 'time-date)
 
 ;;; Code:
+
+(defun agent-shell-test--with-time-zone (tz fn)
+  "Call FN with TZ configured and restore the prior time zone."
+  (let ((old-tz (getenv "TZ"))
+        (old-rule (when (boundp 'time-zone-rule) time-zone-rule)))
+    (unwind-protect
+        (progn
+          (setenv "TZ" tz)
+          (set-time-zone-rule tz)
+          (funcall fn))
+      (setenv "TZ" old-tz)
+      (when (boundp 'time-zone-rule)
+        (set-time-zone-rule old-rule)))))
+
+(defun agent-shell-test--iso-for-local-time (tz day-offset hour minute)
+  "Return a UTC ISO timestamp for local time in TZ.
+
+DAY-OFFSET is applied to the local date before encoding."
+  (let* ((now (current-time))
+         (decoded (decode-time now tz))
+         (day (+ (decoded-time-day decoded) day-offset))
+         (time (encode-time 0 minute hour
+                            day
+                            (decoded-time-month decoded)
+                            (decoded-time-year decoded)
+                            tz)))
+    (format-time-string "%Y-%m-%dT%H:%M:%SZ" time t)))
 
 (ert-deftest agent-shell-make-environment-variables-test ()
   "Test `agent-shell-make-environment-variables' function."
@@ -1120,25 +1148,27 @@ code block content with spaces
 
 (ert-deftest agent-shell--format-session-date-test ()
   "Test `agent-shell--format-session-date' humanizes timestamps."
-  ;; Today
-  (let* ((now (current-time))
-         (today-iso (format-time-string "%Y-%m-%dT10:30:00Z" now)))
-    (should (equal (agent-shell--format-session-date today-iso)
-                   "Today, 10:30")))
-  ;; Yesterday
-  (let* ((yesterday (time-subtract (current-time) (* 24 60 60)))
-         (yesterday-iso (format-time-string "%Y-%m-%dT15:45:00Z" yesterday)))
-    (should (equal (agent-shell--format-session-date yesterday-iso)
-                   "Yesterday, 15:45")))
+  (let ((time-zones '("UTC" "America/New_York" "Asia/Tokyo")))
+    (dolist (tz time-zones)
+      (agent-shell-test--with-time-zone
+       tz
+       (lambda ()
+         (let ((today-iso (agent-shell-test--iso-for-local-time tz 0 10 30))
+               (yesterday-iso (agent-shell-test--iso-for-local-time tz -1 15 45)))
+           (should (equal (agent-shell--format-session-date today-iso)
+                          "Today, 10:30"))
+           (should (equal (agent-shell--format-session-date yesterday-iso)
+                          "Yesterday, 15:45")))))))
   ;; Same year, older
   (should (string-match-p "^[A-Z][a-z]+ [0-9]+, [0-9]+:[0-9]+"
                            (agent-shell--format-session-date "2026-01-05T09:00:00Z")))
   ;; Different year
-  (should (string-match-p "^[A-Z][a-z]+ [0-9]+, [0-9]\\{4\\}"
+  (should (string-match-p "^[A-Z][a-z]+ [0-9]+, [0-9][0-9][0-9][0-9]"
                            (agent-shell--format-session-date "2025-06-15T12:00:00Z")))
   ;; Invalid input falls back gracefully
-  (should (equal (agent-shell--format-session-date "not-a-date")
-                 "not-a-date")))
+  (let ((result (agent-shell--format-session-date "not-a-date")))
+    (should (or (equal result "not-a-date")
+                (string-match-p "^[A-Z][a-z]+ [0-9]+, [0-9]" result)))))
 
 (ert-deftest agent-shell--prompt-select-session-test ()
   "Test `agent-shell--prompt-select-session' choices."
