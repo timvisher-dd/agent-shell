@@ -6,7 +6,7 @@
 ;;; Code:
 
 (defun agent-shell--test-make-terminal (terminal-id output-buffer &rest overrides)
-  "Return a terminal entry for tests, applying OVERRIDES."
+  "Return a terminal entry for TERMINAL-ID and OUTPUT-BUFFER, applying OVERRIDES."
   (let ((terminal `((:id . ,terminal-id)
                     (:process . nil)
                     (:output-buffer . ,output-buffer)
@@ -72,6 +72,112 @@
       (when (buffer-live-p output-buffer)
         (kill-buffer output-buffer)))))
 
+
+(ert-deftest agent-shell--terminal-output-does-not-accumulate-chunks-test ()
+  "Terminal output does not accumulate in output chunks."
+  (let* ((buffer (get-buffer-create " *agent-shell-terminal-no-chunks*"))
+         (terminal-id "term_no_chunks")
+         (output-buffer nil)
+         (agent-shell--state (agent-shell--make-state :buffer buffer)))
+    (map-put! agent-shell--state :client 'test-client)
+    (map-put! agent-shell--state :request-count 1)
+    (with-current-buffer buffer
+      (erase-buffer)
+      (agent-shell-mode))
+    (setq output-buffer (agent-shell--terminal-make-output-buffer terminal-id))
+    (agent-shell--terminal-put
+     agent-shell--state
+     terminal-id
+     (agent-shell--test-make-terminal terminal-id output-buffer))
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
+                   (lambda (&rest _args) nil)))
+          (with-current-buffer buffer
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :notification `((method . "session/update")
+                             (params . ((update . ((sessionUpdate . "tool_call")
+                                                    (toolCallId . "call-no-chunks")
+                                                    (status . "in_progress")
+                                                    (title . "Terminal")
+                                                    (kind . "tool")
+                                                    (content . [((type . "terminal")
+                                                                 (terminalId . ,terminal-id))]))))))))
+          (agent-shell--terminal-handle-output
+           agent-shell--state
+           terminal-id
+           "chunk-A")
+          (agent-shell--terminal-handle-output
+           agent-shell--state
+           terminal-id
+           "chunk-B")
+          (with-current-buffer buffer
+            (let ((contents (buffer-string)))
+              (should (string-match-p (regexp-quote "chunk-A") contents))
+              (should (string-match-p (regexp-quote "chunk-B") contents))))
+          (should-not (agent-shell--tool-call-output-text agent-shell--state
+                                                          "call-no-chunks")))
+      (when terminal-id
+        (agent-shell--terminal-remove agent-shell--state terminal-id))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))
+      (when (buffer-live-p output-buffer)
+        (kill-buffer output-buffer)))))
+
+(ert-deftest agent-shell--terminal-final-update-ignores-agent-content-test ()
+  "Final tool_call_update ignores agent content for terminal tool calls."
+  (let* ((buffer (get-buffer-create " *agent-shell-terminal-final-ignore*"))
+         (terminal-id "term_final_ignore")
+         (output-buffer nil)
+         (agent-shell--state (agent-shell--make-state :buffer buffer)))
+    (map-put! agent-shell--state :client 'test-client)
+    (map-put! agent-shell--state :request-count 1)
+    (with-current-buffer buffer
+      (erase-buffer)
+      (agent-shell-mode))
+    (setq output-buffer (agent-shell--terminal-make-output-buffer terminal-id))
+    (agent-shell--terminal-put
+     agent-shell--state
+     terminal-id
+     (agent-shell--test-make-terminal terminal-id output-buffer))
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
+                   (lambda (&rest _args) nil)))
+          (with-current-buffer buffer
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :notification `((method . "session/update")
+                             (params . ((update . ((sessionUpdate . "tool_call")
+                                                    (toolCallId . "call-final-ignore")
+                                                    (status . "in_progress")
+                                                    (title . "Terminal")
+                                                    (kind . "tool")
+                                                    (content . [((type . "terminal")
+                                                                 (terminalId . ,terminal-id))]))))))))
+          (agent-shell--terminal-handle-output
+           agent-shell--state
+           terminal-id
+           "terminal output")
+          (with-current-buffer buffer
+            (should (string-match-p "terminal output" (buffer-string))))
+          (with-current-buffer buffer
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :notification `((method . "session/update")
+                             (params . ((update . ((sessionUpdate . "tool_call_update")
+                                                    (toolCallId . "call-final-ignore")
+                                                    (status . "completed")
+                                                    (content . [((type . "content")
+                                                                 (content . ((text . "agent summary"))))]))))))))
+          (with-current-buffer buffer
+            (should (string-match-p "terminal output" (buffer-string)))
+            (should-not (string-match-p "agent summary" (buffer-string)))))
+      (when terminal-id
+        (agent-shell--terminal-remove agent-shell--state terminal-id))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))
+      (when (buffer-live-p output-buffer)
+        (kill-buffer output-buffer)))))
 
 (ert-deftest agent-shell--terminal-output-persists-after-release-test ()
   "Terminal output remains visible after release."

@@ -1506,14 +1506,26 @@ COMMAND, when present, may be a shell command string or an argv vector."
   (let* ((tool-call-id (map-elt update 'toolCallId))
          (status (map-elt update 'status))
          (meta-response (agent-shell--tool-call-meta-response-text update))
-         (final (member status '("completed" "failed" "cancelled"))))
+         (final (member status '("completed" "failed" "cancelled")))
+         (stored-content (map-nested-elt state `(:tool-calls ,tool-call-id :content)))
+         (terminal-ids (agent-shell--tool-call-terminal-ids
+                        (or stored-content (map-elt update 'content))))
+         (terminal-output (when terminal-ids
+                            (mapconcat
+                             (lambda (terminal-id)
+                               (when-let ((terminal (agent-shell--terminal-get state terminal-id))
+                                          (buffer (agent-shell--terminal-output-buffer terminal)))
+                                 (with-current-buffer buffer
+                                   (buffer-substring-no-properties (point-min) (point-max)))))
+                             terminal-ids
+                             ""))))
     (agent-shell--save-tool-call
      state
      tool-call-id
      (agent-shell--tool-call-update-overrides state update nil nil))
     (cond
      ;; Non-final meta toolResponse: output in _meta.*.toolResponse
-     ((and meta-response (not final))
+     ((and meta-response (not final) (not terminal-ids))
       (let ((chunk (agent-shell--tool-call-normalize-output meta-response)))
         (when (and chunk (not (string-empty-p chunk)))
           (agent-shell--tool-call-append-output-chunk state tool-call-id chunk)
@@ -1522,8 +1534,10 @@ COMMAND, when present, may be a shell command string or an argv vector."
       (agent-shell--handle-tool-call-update
        state
        update
-       (or (agent-shell--tool-call-output-text state tool-call-id)
-           (agent-shell--tool-call-content-text (map-elt update 'content))))
+       (if terminal-ids
+           (or terminal-output "")
+         (or (agent-shell--tool-call-output-text state tool-call-id)
+             (agent-shell--tool-call-content-text (map-elt update 'content)))))
       (agent-shell--tool-call-clear-output state tool-call-id)))))
 
 (defun agent-shell--handle-tool-call-update (state update &optional output-text)
