@@ -1546,7 +1546,7 @@ INCLUDE-CONTENT and INCLUDE-DIFF control optional fields."
        state
        update
        (if terminal-ids
-           ""
+           nil
          (or (agent-shell--tool-call-output-text state tool-call-id)
              (agent-shell--tool-call-content-text (map-elt update 'content)))))
       (agent-shell--tool-call-clear-output state tool-call-id)))))
@@ -1555,15 +1555,19 @@ INCLUDE-CONTENT and INCLUDE-DIFF control optional fields."
   "Handle tool call UPDATE in STATE immediately.
 OUTPUT-TEXT overrides content-derived output."
   (let-alist update
-    ;; Update stored tool call data with new status and content
-    (agent-shell--save-tool-call
-     state
-     .toolCallId
-     (agent-shell--tool-call-update-overrides state update t t))
-    (let* ((diff (map-nested-elt state `(:tool-calls ,.toolCallId :diff)))
-           (content-text (or output-text
-                             (agent-shell--tool-call-content-text .content)
-                             ""))
+    (let* ((stored-content (map-nested-elt state `(:tool-calls ,.toolCallId :content)))
+           (terminal-ids (agent-shell--tool-call-terminal-ids
+                          (or stored-content .content))))
+      ;; Update stored tool call data with new status and content
+      (agent-shell--save-tool-call
+       state
+       .toolCallId
+       (agent-shell--tool-call-update-overrides state update t t))
+      (let* ((diff (map-nested-elt state `(:tool-calls ,.toolCallId :diff)))
+             (content-text (cond
+                            (output-text output-text)
+                            (terminal-ids "")
+                            (t (or (agent-shell--tool-call-content-text .content) ""))))
            (output (if (string-empty-p content-text)
                        ""
                      (concat "
@@ -1616,7 +1620,7 @@ OUTPUT-TEXT overrides content-derived output."
          :label-right (map-elt tool-call-labels :title)
          :body (string-trim body-text)
          :navigation 'always
-         :expanded agent-shell-tool-use-expand-by-default)))))
+         :expanded agent-shell-tool-use-expand-by-default))))))
 
 
 (cl-defun agent-shell--on-request (&key state request)
