@@ -179,6 +179,65 @@
       (when (buffer-live-p output-buffer)
         (kill-buffer output-buffer)))))
 
+
+(ert-deftest agent-shell--terminal-final-update-preserves-streamed-output-test ()
+  "Final tool_call_update preserves streamed output for terminal tool calls."
+  (let* ((buffer (get-buffer-create " *agent-shell-terminal-final-preserve*"))
+         (terminal-id "term_final_preserve")
+         (output-buffer nil)
+         (agent-shell--state (agent-shell--make-state :buffer buffer)))
+    (map-put! agent-shell--state :client 'test-client)
+    (map-put! agent-shell--state :request-count 1)
+    (with-current-buffer buffer
+      (erase-buffer)
+      (agent-shell-mode))
+    (setq output-buffer (agent-shell--terminal-make-output-buffer terminal-id))
+    (agent-shell--terminal-put
+     agent-shell--state
+     terminal-id
+     (agent-shell--test-make-terminal terminal-id output-buffer))
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
+                   (lambda (&rest _args) nil)))
+          (with-current-buffer buffer
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :notification `((method . "session/update")
+                             (params . ((update . ((sessionUpdate . "tool_call")
+                                                    (toolCallId . "call-final-preserve")
+                                                    (status . "in_progress")
+                                                    (title . "Terminal")
+                                                    (kind . "tool")
+                                                    (content . [((type . "terminal")
+                                                                 (terminalId . ,terminal-id))]))))))))
+          (agent-shell--terminal-handle-output
+           agent-shell--state
+           terminal-id
+           "hello ")
+          (agent-shell--terminal-handle-output
+           agent-shell--state
+           terminal-id
+           "world")
+          (let* ((before (with-current-buffer buffer (buffer-string)))
+                 (before-pos (string-match (regexp-quote "hello world") before))
+                 (before-tail (and before-pos (substring before before-pos))))
+            (should before-pos)
+            (agent-shell--handle-tool-call-update-streaming
+             agent-shell--state
+             `((toolCallId . "call-final-preserve")
+               (status . "completed")))
+            (let* ((after (with-current-buffer buffer (buffer-string)))
+                   (after-pos (string-match (regexp-quote "hello world") after))
+                   (after-tail (and after-pos (substring after after-pos))))
+              (should after-pos)
+              (should (string= before-tail after-tail)))))
+      (when terminal-id
+        (agent-shell--terminal-remove agent-shell--state terminal-id))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))
+      (when (buffer-live-p output-buffer)
+        (kill-buffer output-buffer)))))
+
 (ert-deftest agent-shell--terminal-output-persists-after-release-test ()
   "Terminal output remains visible after release."
   (let* ((buffer (get-buffer-create " *agent-shell-terminal-release-output*"))

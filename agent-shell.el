@@ -1505,6 +1505,15 @@ INCLUDE-CONTENT and INCLUDE-DIFF control optional fields."
                 'read-only t
                 'front-sticky '(read-only)
                 'agent-shell-ui-state ui-state))
+              (when ui-state
+                (let* ((qualified-id (map-elt ui-state :qualified-id))
+                       (key (and qualified-id (concat qualified-id "-body"))))
+                  (when key
+                    (unless agent-shell-ui--content-store
+                      (setq agent-shell-ui--content-store (make-hash-table :test 'equal)))
+                    (puthash key
+                             (concat (or (gethash key agent-shell-ui--content-store) "") text)
+                             agent-shell-ui--content-store))))
               (when collapsed
                 (add-text-properties start end '(invisible t))))))
         (if was-at-end
@@ -1520,16 +1529,7 @@ INCLUDE-CONTENT and INCLUDE-DIFF control optional fields."
          (final (member status '("completed" "failed" "cancelled")))
          (stored-content (map-nested-elt state `(:tool-calls ,tool-call-id :content)))
          (terminal-ids (agent-shell--tool-call-terminal-ids
-                        (or stored-content (map-elt update 'content))))
-         (terminal-output (when terminal-ids
-                            (mapconcat
-                             (lambda (terminal-id)
-                               (when-let ((terminal (agent-shell--terminal-get state terminal-id))
-                                          (buffer (agent-shell--terminal-output-buffer terminal)))
-                                 (with-current-buffer buffer
-                                   (buffer-substring-no-properties (point-min) (point-max)))))
-                             terminal-ids
-                             ""))))
+                        (or stored-content (map-elt update 'content)))))
     (agent-shell--save-tool-call
      state
      tool-call-id
@@ -1546,7 +1546,7 @@ INCLUDE-CONTENT and INCLUDE-DIFF control optional fields."
        state
        update
        (if terminal-ids
-           (or terminal-output "")
+           ""
          (or (agent-shell--tool-call-output-text state tool-call-id)
              (agent-shell--tool-call-content-text (map-elt update 'content)))))
       (agent-shell--tool-call-clear-output state tool-call-id)))))
