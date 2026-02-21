@@ -2,6 +2,7 @@
 
 (require 'ert)
 (require 'agent-shell)
+(require 'cl-lib)
 
 ;;; Code:
 
@@ -20,6 +21,35 @@
       (setf (map-elt terminal (car override)) (cdr override)))
     terminal))
 
+(defmacro agent-shell--with-terminal-test-fixture (buffer output-buffer terminal-id state &rest body)
+  "Run BODY with a terminal test fixture.
+Binds BUFFER, OUTPUT-BUFFER, TERMINAL-ID, and STATE, then cleans up."
+  (declare (indent 4))
+  `(let* ((,terminal-id ,(symbol-name (gensym "term_")))
+          (,buffer (get-buffer-create (format " *agent-shell-terminal-test-%s*" ,terminal-id)))
+          (,output-buffer nil)
+          (,state (agent-shell--make-state :buffer ,buffer)))
+     (map-put! ,state :client 'test-client)
+     (map-put! ,state :request-count 1)
+     (with-current-buffer ,buffer
+       (erase-buffer)
+       (agent-shell-mode)
+       (setq-local agent-shell--state ,state))
+     (setq ,output-buffer (agent-shell--terminal-make-output-buffer ,terminal-id))
+     (agent-shell--terminal-put
+      ,state ,terminal-id
+      (agent-shell--test-make-terminal ,terminal-id ,output-buffer))
+     (unwind-protect
+         (cl-letf (((symbol-function 'agent-shell--make-diff-info)
+                    (lambda (&rest _args) nil)))
+           ,@body)
+       (when (agent-shell--terminal-get ,state ,terminal-id)
+         (agent-shell--terminal-remove ,state ,terminal-id))
+       (when (buffer-live-p ,buffer)
+         (kill-buffer ,buffer))
+       (when (buffer-live-p ,output-buffer)
+         (kill-buffer ,output-buffer)))))
+
 (ert-deftest agent-shell--terminal-normalize-env-test ()
   "Normalize terminal env entries to NAME=VALUE strings."
   (should (equal (agent-shell--terminal-normalize-env
@@ -29,320 +59,187 @@
 
 (ert-deftest agent-shell--terminal-output-streams-to-buffer-test ()
   "Stream terminal output referenced in tool call content into the shell buffer."
-  (let* ((buffer (get-buffer-create " *agent-shell-terminal-output-stream*"))
-         (terminal-id "term_1")
-         (output-buffer nil)
-         (agent-shell--state (agent-shell--make-state :buffer buffer)))
-    (map-put! agent-shell--state :client 'test-client)
-    (map-put! agent-shell--state :request-count 1)
+  (agent-shell--with-terminal-test-fixture buffer output-buffer terminal-id agent-shell--state
     (with-current-buffer buffer
-      (erase-buffer)
-      (agent-shell-mode))
-    (setq output-buffer (agent-shell--terminal-make-output-buffer terminal-id))
-    (agent-shell--terminal-put
+      (agent-shell--on-notification
+       :state agent-shell--state
+       :notification `((method . "session/update")
+                       (params . ((update . ((sessionUpdate . "tool_call")
+                                              (toolCallId . "call-1")
+                                              (status . "in_progress")
+                                              (title . "Terminal")
+                                              (kind . "tool")
+                                              (content . [((type . "terminal")
+                                                           (terminalId . ,terminal-id))]))))))))
+    (agent-shell--terminal-handle-output
      agent-shell--state
      terminal-id
-     (agent-shell--test-make-terminal terminal-id output-buffer))
-    (unwind-protect
-        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
-                   (lambda (&rest _args) nil)))
-          (with-current-buffer buffer
-            (agent-shell--on-notification
-             :state agent-shell--state
-             :notification `((method . "session/update")
-                             (params . ((update . ((sessionUpdate . "tool_call")
-                                                    (toolCallId . "call-1")
-                                                    (status . "in_progress")
-                                                    (title . "Terminal")
-                                                    (kind . "tool")
-                                                    (content . [((type . "terminal")
-                                                                 (terminalId . ,terminal-id))]))))))))
-          (agent-shell--terminal-handle-output
-           agent-shell--state
-           terminal-id
-           "terminal chunk")
-          (with-current-buffer buffer
-            (should (string-match-p "terminal chunk" (buffer-string))))
-          (with-current-buffer output-buffer
-            (should (string-match-p "terminal chunk" (buffer-string)))))
-      (when terminal-id
-        (agent-shell--terminal-remove agent-shell--state terminal-id))
-      (when (buffer-live-p buffer)
-        (kill-buffer buffer))
-      (when (buffer-live-p output-buffer)
-        (kill-buffer output-buffer)))))
-
+     "terminal chunk")
+    (with-current-buffer buffer
+      (should (string-match-p "terminal chunk" (buffer-string))))
+    (with-current-buffer output-buffer
+      (should (string-match-p "terminal chunk" (buffer-string))))))
 
 (ert-deftest agent-shell--terminal-output-does-not-accumulate-chunks-test ()
   "Terminal output does not accumulate in output chunks."
-  (let* ((buffer (get-buffer-create " *agent-shell-terminal-no-chunks*"))
-         (terminal-id "term_no_chunks")
-         (output-buffer nil)
-         (agent-shell--state (agent-shell--make-state :buffer buffer)))
-    (map-put! agent-shell--state :client 'test-client)
-    (map-put! agent-shell--state :request-count 1)
+  (agent-shell--with-terminal-test-fixture buffer output-buffer terminal-id agent-shell--state
     (with-current-buffer buffer
-      (erase-buffer)
-      (agent-shell-mode))
-    (setq output-buffer (agent-shell--terminal-make-output-buffer terminal-id))
-    (agent-shell--terminal-put
+      (agent-shell--on-notification
+       :state agent-shell--state
+       :notification `((method . "session/update")
+                       (params . ((update . ((sessionUpdate . "tool_call")
+                                              (toolCallId . "call-no-chunks")
+                                              (status . "in_progress")
+                                              (title . "Terminal")
+                                              (kind . "tool")
+                                              (content . [((type . "terminal")
+                                                           (terminalId . ,terminal-id))]))))))))
+    (agent-shell--terminal-handle-output
      agent-shell--state
      terminal-id
-     (agent-shell--test-make-terminal terminal-id output-buffer))
-    (unwind-protect
-        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
-                   (lambda (&rest _args) nil)))
-          (with-current-buffer buffer
-            (agent-shell--on-notification
-             :state agent-shell--state
-             :notification `((method . "session/update")
-                             (params . ((update . ((sessionUpdate . "tool_call")
-                                                    (toolCallId . "call-no-chunks")
-                                                    (status . "in_progress")
-                                                    (title . "Terminal")
-                                                    (kind . "tool")
-                                                    (content . [((type . "terminal")
-                                                                 (terminalId . ,terminal-id))]))))))))
-          (agent-shell--terminal-handle-output
-           agent-shell--state
-           terminal-id
-           "chunk-A")
-          (agent-shell--terminal-handle-output
-           agent-shell--state
-           terminal-id
-           "chunk-B")
-          (with-current-buffer buffer
-            (let ((contents (buffer-string)))
-              (should (string-match-p (regexp-quote "chunk-A") contents))
-              (should (string-match-p (regexp-quote "chunk-B") contents))))
-          (should-not (agent-shell--tool-call-output-text agent-shell--state
-                                                          "call-no-chunks")))
-      (when terminal-id
-        (agent-shell--terminal-remove agent-shell--state terminal-id))
-      (when (buffer-live-p buffer)
-        (kill-buffer buffer))
-      (when (buffer-live-p output-buffer)
-        (kill-buffer output-buffer)))))
+     "chunk-A")
+    (agent-shell--terminal-handle-output
+     agent-shell--state
+     terminal-id
+     "chunk-B")
+    (with-current-buffer buffer
+      (let ((contents (buffer-string)))
+        (should (string-match-p (regexp-quote "chunk-A") contents))
+        (should (string-match-p (regexp-quote "chunk-B") contents))))
+    (should-not (agent-shell--tool-call-output-text agent-shell--state
+                                                    "call-no-chunks"))))
 
 (ert-deftest agent-shell--terminal-final-update-ignores-agent-content-test ()
   "Final tool_call_update ignores agent content for terminal tool calls."
-  (let* ((buffer (get-buffer-create " *agent-shell-terminal-final-ignore*"))
-         (terminal-id "term_final_ignore")
-         (output-buffer nil)
-         (agent-shell--state (agent-shell--make-state :buffer buffer)))
-    (map-put! agent-shell--state :client 'test-client)
-    (map-put! agent-shell--state :request-count 1)
+  (agent-shell--with-terminal-test-fixture buffer output-buffer terminal-id agent-shell--state
     (with-current-buffer buffer
-      (erase-buffer)
-      (agent-shell-mode))
-    (setq output-buffer (agent-shell--terminal-make-output-buffer terminal-id))
-    (agent-shell--terminal-put
+      (agent-shell--on-notification
+       :state agent-shell--state
+       :notification `((method . "session/update")
+                       (params . ((update . ((sessionUpdate . "tool_call")
+                                              (toolCallId . "call-final-ignore")
+                                              (status . "in_progress")
+                                              (title . "Terminal")
+                                              (kind . "tool")
+                                              (content . [((type . "terminal")
+                                                           (terminalId . ,terminal-id))]))))))))
+    (agent-shell--terminal-handle-output
      agent-shell--state
      terminal-id
-     (agent-shell--test-make-terminal terminal-id output-buffer))
-    (unwind-protect
-        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
-                   (lambda (&rest _args) nil)))
-          (with-current-buffer buffer
-            (agent-shell--on-notification
-             :state agent-shell--state
-             :notification `((method . "session/update")
-                             (params . ((update . ((sessionUpdate . "tool_call")
-                                                    (toolCallId . "call-final-ignore")
-                                                    (status . "in_progress")
-                                                    (title . "Terminal")
-                                                    (kind . "tool")
-                                                    (content . [((type . "terminal")
-                                                                 (terminalId . ,terminal-id))]))))))))
-          (agent-shell--terminal-handle-output
-           agent-shell--state
-           terminal-id
-           "terminal output")
-          (with-current-buffer buffer
-            (should (string-match-p "terminal output" (buffer-string))))
-          (with-current-buffer buffer
-            (agent-shell--on-notification
-             :state agent-shell--state
-             :notification `((method . "session/update")
-                             (params . ((update . ((sessionUpdate . "tool_call_update")
-                                                    (toolCallId . "call-final-ignore")
-                                                    (status . "completed")
-                                                    (content . [((type . "content")
-                                                                 (content . ((text . "agent summary"))))]))))))))
-          (with-current-buffer buffer
-            (should (string-match-p "terminal output" (buffer-string)))
-            (should-not (string-match-p "agent summary" (buffer-string)))))
-      (when terminal-id
-        (agent-shell--terminal-remove agent-shell--state terminal-id))
-      (when (buffer-live-p buffer)
-        (kill-buffer buffer))
-      (when (buffer-live-p output-buffer)
-        (kill-buffer output-buffer)))))
-
+     "terminal output")
+    (with-current-buffer buffer
+      (should (string-match-p "terminal output" (buffer-string))))
+    (with-current-buffer buffer
+      (agent-shell--on-notification
+       :state agent-shell--state
+       :notification `((method . "session/update")
+                       (params . ((update . ((sessionUpdate . "tool_call_update")
+                                              (toolCallId . "call-final-ignore")
+                                              (status . "completed")
+                                              (content . [((type . "content")
+                                                           (content . ((text . "agent summary"))))]))))))))
+    (with-current-buffer buffer
+      (should (string-match-p "terminal output" (buffer-string)))
+      (should-not (string-match-p "agent summary" (buffer-string))))))
 
 (ert-deftest agent-shell--terminal-final-update-preserves-streamed-output-test ()
   "Final tool_call_update preserves streamed output for terminal tool calls."
-  (let* ((buffer (get-buffer-create " *agent-shell-terminal-final-preserve*"))
-         (terminal-id "term_final_preserve")
-         (output-buffer nil)
-         (agent-shell--state (agent-shell--make-state :buffer buffer)))
-    (map-put! agent-shell--state :client 'test-client)
-    (map-put! agent-shell--state :request-count 1)
+  (agent-shell--with-terminal-test-fixture buffer output-buffer terminal-id agent-shell--state
     (with-current-buffer buffer
-      (erase-buffer)
-      (agent-shell-mode))
-    (setq output-buffer (agent-shell--terminal-make-output-buffer terminal-id))
-    (agent-shell--terminal-put
+      (agent-shell--on-notification
+       :state agent-shell--state
+       :notification `((method . "session/update")
+                       (params . ((update . ((sessionUpdate . "tool_call")
+                                              (toolCallId . "call-final-preserve")
+                                              (status . "in_progress")
+                                              (title . "Terminal")
+                                              (kind . "tool")
+                                              (content . [((type . "terminal")
+                                                           (terminalId . ,terminal-id))]))))))))
+    (agent-shell--terminal-handle-output
      agent-shell--state
      terminal-id
-     (agent-shell--test-make-terminal terminal-id output-buffer))
-    (unwind-protect
-        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
-                   (lambda (&rest _args) nil)))
-          (with-current-buffer buffer
-            (agent-shell--on-notification
-             :state agent-shell--state
-             :notification `((method . "session/update")
-                             (params . ((update . ((sessionUpdate . "tool_call")
-                                                    (toolCallId . "call-final-preserve")
-                                                    (status . "in_progress")
-                                                    (title . "Terminal")
-                                                    (kind . "tool")
-                                                    (content . [((type . "terminal")
-                                                                 (terminalId . ,terminal-id))]))))))))
-          (agent-shell--terminal-handle-output
-           agent-shell--state
-           terminal-id
-           "hello ")
-          (agent-shell--terminal-handle-output
-           agent-shell--state
-           terminal-id
-           "world")
-          (let* ((before (with-current-buffer buffer (buffer-string)))
-                 (before-pos (string-match (regexp-quote "hello world") before))
-                 (before-tail (and before-pos (substring before before-pos))))
-            (should before-pos)
-            (agent-shell--handle-tool-call-update-streaming
-             agent-shell--state
-             `((toolCallId . "call-final-preserve")
-               (status . "completed")))
-            (let* ((after (with-current-buffer buffer (buffer-string)))
-                   (after-pos (string-match (regexp-quote "hello world") after))
-                   (after-tail (and after-pos (substring after after-pos))))
-              (should after-pos)
-              (should (string= before-tail after-tail)))))
-      (when terminal-id
-        (agent-shell--terminal-remove agent-shell--state terminal-id))
-      (when (buffer-live-p buffer)
-        (kill-buffer buffer))
-      (when (buffer-live-p output-buffer)
-        (kill-buffer output-buffer)))))
+     "hello ")
+    (agent-shell--terminal-handle-output
+     agent-shell--state
+     terminal-id
+     "world")
+    (let* ((before (with-current-buffer buffer (buffer-string)))
+           (before-pos (string-match (regexp-quote "hello world") before))
+           (before-tail (and before-pos (substring before before-pos))))
+      (should before-pos)
+      (agent-shell--handle-tool-call-update-streaming
+       agent-shell--state
+       `((toolCallId . "call-final-preserve")
+         (status . "completed")))
+      (let* ((after (with-current-buffer buffer (buffer-string)))
+             (after-pos (string-match (regexp-quote "hello world") after))
+             (after-tail (and after-pos (substring after after-pos))))
+        (should after-pos)
+        (should (string= before-tail after-tail))))))
 
 (ert-deftest agent-shell--terminal-output-persists-after-release-test ()
   "Terminal output remains visible after release."
-  (let* ((buffer (get-buffer-create " *agent-shell-terminal-release-output*"))
-         (terminal-id "term_release")
-         (output-buffer nil)
-         (_responses nil)
-         (agent-shell--state (agent-shell--make-state :buffer buffer)))
-    (map-put! agent-shell--state :client 'test-client)
-    (map-put! agent-shell--state :request-count 1)
-    (with-current-buffer buffer
-      (erase-buffer)
-      (agent-shell-mode))
-    (setq output-buffer (agent-shell--terminal-make-output-buffer terminal-id))
-    (agent-shell--terminal-put
-     agent-shell--state
-     terminal-id
-     (agent-shell--test-make-terminal terminal-id output-buffer))
-    (unwind-protect
-        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
-                   (lambda (&rest _args) nil))
-                  ((symbol-function 'acp-send-response)
-                   (lambda (&rest args)
-                     (push args _responses))))
-          (with-current-buffer buffer
-            (agent-shell--on-notification
-             :state agent-shell--state
-             :notification `((method . "session/update")
-                             (params . ((update . ((sessionUpdate . "tool_call")
-                                                    (toolCallId . "call-release")
-                                                    (status . "in_progress")
-                                                    (title . "Terminal")
-                                                    (kind . "tool")
-                                                    (content . [((type . "terminal")
-                                                                 (terminalId . ,terminal-id))]))))))))
-          (agent-shell--terminal-handle-output
-           agent-shell--state
-           terminal-id
-           "release output")
-          (with-current-buffer buffer
-            (should (string-match-p "release output" (buffer-string))))
-          (agent-shell--on-terminal-release-request
+  (agent-shell--with-terminal-test-fixture buffer output-buffer terminal-id agent-shell--state
+    (let ((responses nil))
+      (cl-letf (((symbol-function 'acp-send-response)
+                 (lambda (&rest args)
+                   (push args responses))))
+        (with-current-buffer buffer
+          (agent-shell--on-notification
            :state agent-shell--state
-           :request `((id . "req-release")
-                      (params . ((terminalId . ,terminal-id)))))
-          (with-current-buffer buffer
-            (should (string-match-p "release output" (buffer-string))))
-          (let ((terminal (agent-shell--terminal-get agent-shell--state terminal-id)))
-            (should (eq (map-elt terminal :released) t))))
-      (when terminal-id
-        (agent-shell--terminal-remove agent-shell--state terminal-id))
-      (when (buffer-live-p buffer)
-        (kill-buffer buffer))
-      (when (buffer-live-p output-buffer)
-        (kill-buffer output-buffer)))))
+           :notification `((method . "session/update")
+                           (params . ((update . ((sessionUpdate . "tool_call")
+                                                  (toolCallId . "call-release")
+                                                  (status . "in_progress")
+                                                  (title . "Terminal")
+                                                  (kind . "tool")
+                                                  (content . [((type . "terminal")
+                                                               (terminalId . ,terminal-id))]))))))))
+        (agent-shell--terminal-handle-output
+         agent-shell--state
+         terminal-id
+         "release output")
+        (with-current-buffer buffer
+          (should (string-match-p "release output" (buffer-string))))
+        (agent-shell--on-terminal-release-request
+         :state agent-shell--state
+         :request `((id . "req-release")
+                    (params . ((terminalId . ,terminal-id)))))
+        (with-current-buffer buffer
+          (should (string-match-p "release output" (buffer-string))))
+        (let ((terminal (agent-shell--terminal-get agent-shell--state terminal-id)))
+          (should (eq (map-elt terminal :released) t)))))))
 
 (ert-deftest agent-shell--terminal-output-accumulates-test ()
   "Terminal output chunks accumulate in shell and output buffers."
-  (let* ((buffer (get-buffer-create " *agent-shell-terminal-output-accumulate*"))
-         (terminal-id "term_accumulate")
-         (output-buffer nil)
-         (agent-shell--state (agent-shell--make-state :buffer buffer)))
-    (map-put! agent-shell--state :client 'test-client)
-    (map-put! agent-shell--state :request-count 1)
+  (agent-shell--with-terminal-test-fixture buffer output-buffer terminal-id agent-shell--state
     (with-current-buffer buffer
-      (erase-buffer)
-      (agent-shell-mode))
-    (setq output-buffer (agent-shell--terminal-make-output-buffer terminal-id))
-    (agent-shell--terminal-put
+      (agent-shell--on-notification
+       :state agent-shell--state
+       :notification `((method . "session/update")
+                       (params . ((update . ((sessionUpdate . "tool_call")
+                                              (toolCallId . "call-accumulate")
+                                              (status . "in_progress")
+                                              (title . "Terminal")
+                                              (kind . "tool")
+                                              (content . [((type . "terminal")
+                                                           (terminalId . ,terminal-id))]))))))))
+    (agent-shell--terminal-handle-output
      agent-shell--state
      terminal-id
-     (agent-shell--test-make-terminal terminal-id output-buffer))
-    (unwind-protect
-        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
-                   (lambda (&rest _args) nil)))
-          (with-current-buffer buffer
-            (agent-shell--on-notification
-             :state agent-shell--state
-             :notification `((method . "session/update")
-                             (params . ((update . ((sessionUpdate . "tool_call")
-                                                    (toolCallId . "call-accumulate")
-                                                    (status . "in_progress")
-                                                    (title . "Terminal")
-                                                    (kind . "tool")
-                                                    (content . [((type . "terminal")
-                                                                 (terminalId . ,terminal-id))]))))))))
-          (agent-shell--terminal-handle-output
-           agent-shell--state
-           terminal-id
-           "chunk-A")
-          (with-current-buffer buffer
-            (should (string-match-p "chunk-A" (buffer-string))))
-          (agent-shell--terminal-handle-output
-           agent-shell--state
-           terminal-id
-           "chunk-B")
-          (with-current-buffer buffer
-            (should (string-match-p "chunk-A\\(?:.\\|\n\\)*chunk-B" (buffer-string))))
-          (with-current-buffer output-buffer
-            (should (equal (buffer-string) "chunk-Achunk-B"))))
-      (when terminal-id
-        (agent-shell--terminal-remove agent-shell--state terminal-id))
-      (when (buffer-live-p buffer)
-        (kill-buffer buffer))
-      (when (buffer-live-p output-buffer)
-        (kill-buffer output-buffer)))))
+     "chunk-A")
+    (with-current-buffer buffer
+      (should (string-match-p "chunk-A" (buffer-string))))
+    (agent-shell--terminal-handle-output
+     agent-shell--state
+     terminal-id
+     "chunk-B")
+    (with-current-buffer buffer
+      (should (string-match-p "chunk-A\\(?:.\\|\\n\\)*chunk-B" (buffer-string))))
+    (with-current-buffer output-buffer
+      (should (equal (buffer-string) "chunk-Achunk-B")))))
+
 
 (ert-deftest agent-shell--terminal-release-cleanup-after-inactivity-test ()
   "Released terminals are cleaned up after inactivity."
