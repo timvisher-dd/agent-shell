@@ -79,10 +79,6 @@
    ((listp value) value)
    (t nil)))
 
-(defun agent-shell--terminal-normalize-args (args)
-  "Normalize ARGS to a list of strings."
-  (agent-shell--terminal-ensure-list args))
-
 (defun agent-shell--terminal-normalize-env (env)
   "Normalize ENV to a list of \"NAME=VALUE\" strings."
   (let ((entries (agent-shell--terminal-ensure-list env)))
@@ -298,7 +294,7 @@ Use TERMINAL when already looked up."
     (condition-case err
         (let* ((params .params)
                (command (agent-shell--meta-lookup params 'command))
-               (args (agent-shell--terminal-normalize-args
+               (args (agent-shell--terminal-ensure-list
                       (agent-shell--meta-lookup params 'args)))
                (env (agent-shell--terminal-normalize-env
                      (agent-shell--meta-lookup params 'env)))
