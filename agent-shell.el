@@ -2329,6 +2329,24 @@ Dialog can have LABEL-LEFT, LABEL-RIGHT, and BODY.
 Optional flags: APPEND text to existing content, CREATE-NEW block,
 NAVIGATION for navigation style, EXPANDED to show block expanded
 by default."
+  (when label-right
+    (setq label-right (string-trim label-right)))
+  ;; Convert non-standard multiline single-backtick code spans to fenced
+  ;; code blocks so markdown-overlays can recognize them as source blocks,
+  ;; but only for labels that start with `.
+  (when (and label-right (string-match-p
+                          (rx "`" (zero-or-more (not (any "\n`")))
+                              "\n")
+                          label-right))
+    (setq label-right
+          (replace-regexp-in-string
+           (rx "`"
+               (group (zero-or-more (not (any "\n`"))) "\n"
+                      (*? (seq (zero-or-more (not (any "\n"))) "\n"))
+                      (zero-or-more (not (any "\n`"))))
+               "`")
+           "Snippet\n\n```\n\\1\n```\n"
+           label-right)))
   (when-let (((map-elt state :buffer))
              (viewport-buffer (agent-shell-viewport--buffer
                                :shell-buffer (map-elt state :buffer)
