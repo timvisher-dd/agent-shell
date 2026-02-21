@@ -1,38 +1,9 @@
 ;;; agent-shell-tests.el --- Tests for agent-shell -*- lexical-binding: t; -*-
 
 (require 'ert)
-(require 'keymap)
 (require 'agent-shell)
-(require 'time-date)
 
 ;;; Code:
-
-(defun agent-shell-test--with-time-zone (tz fn)
-  "Call FN with TZ configured and restore the prior time zone."
-  (let ((old-tz (getenv "TZ"))
-        (old-rule (when (boundp 'time-zone-rule) time-zone-rule)))
-    (unwind-protect
-        (progn
-          (setenv "TZ" tz)
-          (set-time-zone-rule tz)
-          (funcall fn))
-      (setenv "TZ" old-tz)
-      (when (boundp 'time-zone-rule)
-        (set-time-zone-rule old-rule)))))
-
-(defun agent-shell-test--iso-for-local-time (tz day-offset hour minute)
-  "Return a UTC ISO timestamp for local time in TZ.
-
-DAY-OFFSET is applied to the local date before encoding."
-  (let* ((now (current-time))
-         (decoded (decode-time now tz))
-         (day (+ (decoded-time-day decoded) day-offset))
-         (time (encode-time 0 minute hour
-                            day
-                            (decoded-time-month decoded)
-                            (decoded-time-year decoded)
-                            tz)))
-    (format-time-string "%Y-%m-%dT%H:%M:%SZ" time t)))
 
 (ert-deftest agent-shell-make-environment-variables-test ()
   "Test `agent-shell-make-environment-variables' function."
@@ -1205,27 +1176,25 @@ code block content with spaces
 
 (ert-deftest agent-shell--format-session-date-test ()
   "Test `agent-shell--format-session-date' humanizes timestamps."
-  (let ((time-zones '("UTC" "America/New_York" "Asia/Tokyo")))
-    (dolist (tz time-zones)
-      (agent-shell-test--with-time-zone
-       tz
-       (lambda ()
-         (let ((today-iso (agent-shell-test--iso-for-local-time tz 0 10 30))
-               (yesterday-iso (agent-shell-test--iso-for-local-time tz -1 15 45)))
-           (should (equal (agent-shell--format-session-date today-iso)
-                          "Today, 10:30"))
-           (should (equal (agent-shell--format-session-date yesterday-iso)
-                          "Yesterday, 15:45")))))))
+  ;; Today
+  (let* ((now (current-time))
+         (today-iso (format-time-string "%Y-%m-%dT10:30:00Z" now)))
+    (should (equal (agent-shell--format-session-date today-iso)
+                   "Today, 10:30")))
+  ;; Yesterday
+  (let* ((yesterday (time-subtract (current-time) (* 24 60 60)))
+         (yesterday-iso (format-time-string "%Y-%m-%dT15:45:00Z" yesterday)))
+    (should (equal (agent-shell--format-session-date yesterday-iso)
+                   "Yesterday, 15:45")))
   ;; Same year, older
   (should (string-match-p "^[A-Z][a-z]+ [0-9]+, [0-9]+:[0-9]+"
                            (agent-shell--format-session-date "2026-01-05T09:00:00Z")))
   ;; Different year
-  (should (string-match-p "^[A-Z][a-z]+ [0-9]+, [0-9][0-9][0-9][0-9]"
+  (should (string-match-p "^[A-Z][a-z]+ [0-9]+, [0-9]\\{4\\}"
                            (agent-shell--format-session-date "2025-06-15T12:00:00Z")))
   ;; Invalid input falls back gracefully
-  (let ((result (agent-shell--format-session-date "not-a-date")))
-    (should (or (equal result "not-a-date")
-                (string-match-p "^[A-Z][a-z]+ [0-9]+, [0-9]" result)))))
+  (should (equal (agent-shell--format-session-date "not-a-date")
+                 "not-a-date")))
 
 (ert-deftest agent-shell--prompt-select-session-test ()
   "Test `agent-shell--prompt-select-session' choices."
@@ -1423,52 +1392,6 @@ code block content with spaces
     (should (string-match-p "\\*\\*Parameters:\\*\\*" entry))
     (should (string-match-p "filePath: /home/user/test.txt" entry))
     (should (string-match-p "offset: 100" entry))))
-
-(ert-deftest agent-shell--initialize-request-omits-terminal-output-meta-test ()
-  "Initialize request should not include terminal_output meta capability."
-  (let* ((buffer (get-buffer-create " *agent-shell-init-request*"))
-         (agent-shell--state (agent-shell--make-state :buffer buffer)))
-    (map-put! agent-shell--state :client 'test-client)
-    (with-current-buffer buffer
-      (erase-buffer)
-      (agent-shell-mode)
-      (setq-local agent-shell--state agent-shell--state))
-    (unwind-protect
-        (let ((captured-request nil))
-          (cl-letf (((symbol-function 'acp-send-request)
-                     (lambda (&rest args)
-                       (setq captured-request (plist-get args :request)))))
-            (agent-shell--initiate-handshake
-             :shell-buffer buffer
-             :on-initiated (lambda () nil)))
-          (should-not (map-nested-elt captured-request
-                                      '(:params clientCapabilities _meta))))
-      (when (buffer-live-p buffer)
-        (kill-buffer buffer)))))
-(ert-deftest agent-shell--tool-call-update-writes-output-test ()
-  "Tool call updates should write output to the shell buffer."
-  (let* ((buffer (get-buffer-create " *agent-shell-tool-call-output*"))
-         (agent-shell--state (agent-shell--make-state :buffer buffer)))
-    (map-put! agent-shell--state :client 'test-client)
-    (map-put! agent-shell--state :request-count 1)
-    (with-current-buffer buffer
-      (erase-buffer)
-      (agent-shell-mode))
-    (unwind-protect
-        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
-                   (lambda (&rest _args) nil)))
-          (with-current-buffer buffer
-            (agent-shell--on-notification
-             :state agent-shell--state
-             :notification `((method . "session/update")
-                             (params . ((update . ((sessionUpdate . "tool_call_update")
-                                                    (toolCallId . "call-1")
-                                                    (status . "completed")
-                                                    (content . [((content . ((text . "stream chunk"))))]))))))))
-          (with-current-buffer buffer
-            (should (string-match-p "stream chunk" (buffer-string)))))
-      (when (buffer-live-p buffer)
-        (kill-buffer buffer)))))
 
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here

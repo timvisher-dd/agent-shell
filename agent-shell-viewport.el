@@ -475,9 +475,7 @@ If at the first item, attempt to switch to previous interaction."
 
 With EXISTING-ONLY, only return existing buffers without creating."
   (when-let ((shell-buffer (or shell-buffer
-                               (if existing-only
-                                   (agent-shell--shell-buffer :no-create t :no-error t)
-                                 (agent-shell--shell-buffer)))))
+                               (agent-shell--shell-buffer))))
     (with-current-buffer shell-buffer
       (let* ((viewport-buffer-name (concat (buffer-name (get-buffer shell-buffer))
                                            agent-shell-viewport--suffix))

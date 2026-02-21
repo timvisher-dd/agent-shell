@@ -17,17 +17,3 @@ When contributing:
 ## Contributing
 
 This is an Emacs Lisp project. See [CONTRIBUTING.org](CONTRIBUTING.org) for style guidelines, code checks, and testing. Please adhere to these guidelines.
-
-
-## Testing (batch)
-
-When running ERT from the CLI, use `-Q` so Emacs does not load user init files.
-Load tests explicitly, for example:
-
-```
-emacs --batch -Q -L . --eval '(mapc #'load (file-expand-wildcards "tests/*.el"))' \
-  -f ert-run-tests-batch-and-exit
-```
-
-Add any required `-L` entries for local dependencies.
-

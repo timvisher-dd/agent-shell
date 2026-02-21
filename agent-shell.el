@@ -45,16 +45,6 @@
 (require 'dired)
 (require 'json)
 (require 'map)
-
-;; Optional Flycheck APIs used for error context.
-(declare-function flycheck-overlay-errors-at "flycheck" (pos))
-(declare-function flycheck-error-pos "flycheck" (err))
-(declare-function flycheck-error-end-line "flycheck" (err))
-(declare-function flycheck-error-end-column "flycheck" (err))
-(declare-function flycheck-error-level "flycheck" (err))
-(declare-function flycheck-error-message "flycheck" (err))
-(declare-function flycheck-error-line "flycheck" (err))
-(declare-function flycheck-error-column "flycheck" (err))
 (unless (require 'markdown-overlays nil 'noerror)
   (error "Please update 'shell-maker' to v0.85.1 or newer"))
 (require 'agent-shell-anthropic)
@@ -69,13 +59,11 @@
 (require 'agent-shell-heartbeat)
 (require 'agent-shell-active-message)
 (require 'agent-shell-mistral)
-(require 'agent-shell-meta)
 (require 'agent-shell-openai)
 (require 'agent-shell-opencode)
 (require 'agent-shell-pi)
 (require 'agent-shell-project)
 (require 'agent-shell-qwen)
-(require 'agent-shell-terminal)
 (require 'agent-shell-usage)
 (require 'agent-shell-worktree)
 (require 'agent-shell-ui)
@@ -587,8 +575,6 @@ OUTGOING-REQUEST-DECORATOR (passed through to `acp-make-client')."
         (cons :chunked-group-count 0)
         (cons :request-count 0)
         (cons :tool-calls nil)
-        (cons :terminals nil)
-        (cons :terminal-count 0)
         (cons :available-commands nil)
         (cons :available-modes nil)
         (cons :supports-session-list nil)
@@ -873,9 +859,7 @@ When FORCE is non-nil, skip confirmation prompt."
             :client (map-elt (agent-shell--state) :client)
             :notification (acp-make-session-cancel-notification
                            :session-id (map-nested-elt (agent-shell--state) '(:session :id))
-                           :reason "User cancelled"))
-           ;; Reflect cancellation in tool call UI.
-           (agent-shell--mark-tool-calls-cancelled (agent-shell--state))))
+                           :reason "User cancelled"))))
         (t
          (agent-shell--shutdown)
          (call-interactively #'shell-maker-interrupt))))
@@ -893,9 +877,9 @@ When FORCE is non-nil, skip confirmation prompt."
       :shell-buffer (map-elt shell :buffer)))))
 
 (defun agent-shell--filter-buffer-substring (start end &optional delete)
-  "Return the buffer substring between START and END, after filtering.
+  "Return the buffer substring between BEG and END, after filtering.
 Strip the text properties `line-prefix' and `wrap-prefix' from the
-copied substring.  If DELETE is non-nil, delete the text between START and
+copied substring.  If DELETE is non-nil, delete the text between BEG and
 END from the buffer."
   (let ((text (if delete
                   (prog1 (buffer-substring start end)
@@ -920,7 +904,7 @@ END from the buffer."
   "C-c C-o" #'agent-shell-other-buffer
   "<remap> <yank>" #'agent-shell-yank-dwim)
 
-(shell-maker-define-major-mode (agent-shell--make-shell-maker-config) 'agent-shell-mode-map)
+(shell-maker-define-major-mode (agent-shell--make-shell-maker-config) agent-shell-mode-map)
 
 (cl-defun agent-shell--handle (&key command shell-buffer)
   "Handle SHELL-BUFFER COMMAND (and lazy initialize the ACP stack).
@@ -1165,8 +1149,6 @@ COMMAND, when present, may be a shell command string or an argv vector."
                     :label-left (propertize "Proposed plan" 'font-lock-face 'font-lock-doc-markup-face)
                     :body plan
                     :expanded t)))
-               (agent-shell--terminal-link-tool-call-content
-                state (map-elt update 'toolCallId) (map-elt update 'content))
                (map-put! state :last-entry-type "tool_call"))
               ((equal (map-elt update 'sessionUpdate) "agent_thought_chunk")
                (let-alist update
@@ -1247,9 +1229,93 @@ COMMAND, when present, may be a shell command string or an argv vector."
                   :expanded t))
                (map-put! state :last-entry-type "plan"))
               ((equal (map-elt update 'sessionUpdate) "tool_call_update")
-               (agent-shell--handle-tool-call-update-streaming state update)
-               (agent-shell--terminal-link-tool-call-content
-                state (map-elt update 'toolCallId) (map-elt update 'content))
+               (let-alist update
+                 ;; Update stored tool call data with new status and content
+                 (agent-shell--save-tool-call
+                  state
+                  .toolCallId
+                  (append (list (cons :status (map-elt update 'status))
+                                (cons :content (map-elt update 'content)))
+                          ;; The initial tool_call notification often has a
+                          ;; generic title (eg. "grep", "bash", "Read").
+                          ;; The tool_call_update may have a more descriptive
+                          ;; title (eg. 'grep -i -n "tool" /path/to/file').
+                          ;; Upgrade to the more descriptive title when available.
+                          ;; See https://github.com/xenodium/agent-shell/issues/182
+                          ;; See https://github.com/xenodium/agent-shell/issues/309
+                          (when-let* ((new-title (map-elt update 'title))
+                                      (old-title (map-nested-elt state `(:tool-calls ,.toolCallId :title)))
+                                      (should-upgrade-title
+                                       (and (not (string-empty-p new-title))
+                                            (not (string= old-title new-title)))))
+                            (list (cons :title new-title)))
+                          (when-let* ((description (agent-shell--tool-call-command-to-string
+                                                    (map-nested-elt update '(rawInput description))))
+                                      ((not (map-nested-elt state `(:tool-calls ,.toolCallId :description)))))
+                            (list (cons :description description)))
+                          (when-let* ((command (agent-shell--tool-call-command-to-string
+                                               (map-nested-elt update '(rawInput command))))
+                                      ((not (map-nested-elt state `(:tool-calls ,.toolCallId :command)))))
+                            (list (cons :command command)))
+                          (when-let ((raw-input (map-elt update 'rawInput)))
+                            (list (cons :raw-input raw-input)))
+                          (when-let ((diff (agent-shell--make-diff-info :tool-call update)))
+                            (list (cons :diff diff)))))
+                 (agent-shell--emit-event
+                  :event 'tool-call-update
+                  :data (list (cons :tool-call-id .toolCallId)
+                              (cons :tool-call (map-nested-elt state (list :tool-calls .toolCallId)))))
+                 (let* ((diff (map-nested-elt state `(:tool-calls ,.toolCallId :diff)))
+                        (output (concat
+                                 "\n\n"
+                                 ;; TODO: Consider if there are other
+                                 ;; types of content to display.
+                                 (mapconcat (lambda (item)
+                                              (let-alist item
+                                                .content.text))
+                                            .content
+                                            "\n\n")
+                                 "\n\n"))
+                        (diff-text (agent-shell--format-diff-as-text diff))
+                        (body-text (if diff-text
+                                       (concat output
+                                               "\n\n"
+                                               "╭─────────╮\n"
+                                               "│ changes │\n"
+                                               "╰─────────╯\n\n" diff-text)
+                                     output)))
+                   ;; Log tool call to transcript when completed or failed
+                   (when (and (map-elt update 'status)
+                              (member (map-elt update 'status) '("completed" "failed")))
+                     (agent-shell--append-transcript
+                      :text (agent-shell--make-transcript-tool-call-entry
+                             :status (map-elt update 'status)
+                             :title (map-nested-elt state `(:tool-calls ,.toolCallId :title))
+                             :kind (map-nested-elt state `(:tool-calls ,.toolCallId :kind))
+                             :description (map-nested-elt state `(:tool-calls ,.toolCallId :description))
+                             :command (map-nested-elt state `(:tool-calls ,.toolCallId :command))
+                             :parameters (agent-shell--extract-tool-parameters
+                                          (map-nested-elt state `(:tool-calls ,.toolCallId :raw-input)))
+                             :output body-text)
+                      :file-path agent-shell--transcript-file))
+                   ;; Hide permission after sending response.
+                   ;; Status and permission are no longer pending. User
+                   ;; likely selected one of: accepted/rejected/always.
+                   ;; Remove stale permission dialog.
+                   (when (and (map-elt update 'status)
+                              (not (equal (map-elt update 'status) "pending")))
+                     ;; block-id must be the same as the one used as
+                     ;; agent-shell--update-fragment param by "session/request_permission".
+                     (agent-shell--delete-fragment :state state :block-id (format "permission-%s" .toolCallId)))
+                   (let ((tool-call-labels (agent-shell-make-tool-call-label
+                                            state .toolCallId)))
+                     (agent-shell--update-fragment
+                      :state state
+                      :block-id .toolCallId
+                      :label-left (map-elt tool-call-labels :status)
+                      :label-right (map-elt tool-call-labels :title)
+                      :body (string-trim body-text)
+                      :expanded agent-shell-tool-use-expand-by-default))))
                (map-put! state :last-entry-type "tool_call_update"))
               ((equal (map-elt update 'sessionUpdate) "available_commands_update")
                (let-alist update
@@ -1317,312 +1383,6 @@ COMMAND, when present, may be a shell command string or an argv vector."
             :navigation 'never)
            (map-put! state :last-entry-type nil)))))
 
-(defun agent-shell--tool-call-content-text (content)
-  "Return concatenated text from tool call CONTENT items."
-  (let* ((items (cond
-                 ((vectorp content) (append content nil))
-                 ((listp content) content)
-                 (content (list content))
-                 (t nil)))
-         (parts (delq nil
-                      (mapcar (lambda (item)
-                                (let-alist item
-                                  (when (and (stringp .content.text)
-                                             (not (string-empty-p .content.text)))
-                                    .content.text)))
-                              items))))
-    (when parts
-      (mapconcat #'identity parts "\n\n"))))
-(defun agent-shell--tool-call-normalize-output (text)
-  "Normalize tool call output TEXT for streaming."
-  (when (and text (stringp text))
-    (let* ((lines (split-string text "
-"))
-           (filtered (seq-remove (lambda (line)
-                                   (string-match-p "\`\s-*```" line))
-                                 lines)))
-      (string-join filtered "
-"))))
-
-(defun agent-shell--tool-call-update-overrides (state update &optional include-content include-diff)
-  "Build tool call overrides for UPDATE in STATE.
-INCLUDE-CONTENT and INCLUDE-DIFF control optional fields."
-  (let ((diff (when include-diff
-                (agent-shell--make-diff-info :tool-call update))))
-    (append (list (cons :status (map-elt update 'status)))
-            (when include-content
-              (list (cons :content (map-elt update 'content))))
-            ;; OpenCode reports bash as title in tool_call notification
-            ;; without a command. tool_call_update notification may
-            ;; now have the command so upgrade the title to command
-            ;; as it's more useful.
-            ;; See https://github.com/xenodium/agent-shell/issues/182
-            (when-let* ((should-upgrade-title
-                         (string= (map-nested-elt state
-                                                  `(:tool-calls ,(map-elt update 'toolCallId) :title))
-                                  "bash"))
-                        (command (map-nested-elt update '(rawInput command))))
-              (list (cons :title command)))
-            (when diff
-              (list (cons :diff diff))))))
-
-(defun agent-shell--tool-call-append-output-chunk (state tool-call-id chunk)
-  "Append CHUNK to tool call output buffer for TOOL-CALL-ID in STATE."
-  (let* ((tool-calls (map-elt state :tool-calls))
-         (entry (or (map-elt tool-calls tool-call-id) (list)))
-         (chunks (map-elt entry :output-chunks)))
-    (setf (map-elt entry :output-chunks) (cons chunk chunks))
-    (setf (map-elt tool-calls tool-call-id) entry)
-    (map-put! state :tool-calls tool-calls)))
-
-(defun agent-shell--tool-call-output-marker (state tool-call-id)
-  "Return output marker for TOOL-CALL-ID in STATE."
-  (map-nested-elt state `(:tool-calls ,tool-call-id :output-marker)))
-
-(defun agent-shell--tool-call-output-ui-state (state tool-call-id)
-  "Return cached UI state for TOOL-CALL-ID in STATE."
-  (map-nested-elt state `(:tool-calls ,tool-call-id :output-ui-state)))
-
-(defun agent-shell--tool-call-set-output-marker (state tool-call-id marker)
-  "Set output MARKER for TOOL-CALL-ID in STATE."
-  (let* ((tool-calls (map-elt state :tool-calls))
-         (entry (or (map-elt tool-calls tool-call-id) (list))))
-    (setf (map-elt entry :output-marker) marker)
-    (setf (map-elt tool-calls tool-call-id) entry)
-    (map-put! state :tool-calls tool-calls)))
-
-(defun agent-shell--tool-call-set-output-ui-state (state tool-call-id ui-state)
-  "Set cached UI-STATE for TOOL-CALL-ID in STATE."
-  (let* ((tool-calls (map-elt state :tool-calls))
-         (entry (or (map-elt tool-calls tool-call-id) (list))))
-    (setf (map-elt entry :output-ui-state) ui-state)
-    (setf (map-elt tool-calls tool-call-id) entry)
-    (map-put! state :tool-calls tool-calls)))
-
-(defun agent-shell--tool-call-body-range-info (state tool-call-id)
-  "Return tool call body range info for TOOL-CALL-ID in STATE."
-  (when-let ((buffer (map-elt state :buffer)))
-    (with-current-buffer buffer
-      (let* ((qualified-id (format "%s-%s" (map-elt state :request-count) tool-call-id))
-             (match (save-mark-and-excursion
-                      (goto-char (point-max))
-                      (text-property-search-backward
-                       'agent-shell-ui-state nil
-                       (lambda (_ state)
-                         (equal (map-elt state :qualified-id) qualified-id))
-                       t))))
-        (when match
-          (let* ((block-start (prop-match-beginning match))
-                 (block-end (prop-match-end match))
-                 (ui-state (get-text-property block-start 'agent-shell-ui-state))
-                 (body-range (agent-shell-ui--nearest-range-matching-property
-                              :property 'agent-shell-ui-section :value 'body
-                              :from block-start :to block-end)))
-            (list (cons :ui-state ui-state)
-                  (cons :body-range body-range))))))))
-
-(defun agent-shell--tool-call-ensure-output-marker (state tool-call-id)
-  "Ensure an output marker exists for TOOL-CALL-ID in STATE."
-  (let* ((buffer (map-elt state :buffer))
-         (marker (agent-shell--tool-call-output-marker state tool-call-id)))
-    (when (or (not (markerp marker))
-              (not (eq (marker-buffer marker) buffer)))
-      (setq marker nil))
-    (unless marker
-      (when-let ((info (agent-shell--tool-call-body-range-info state tool-call-id))
-                 (body-range (map-elt info :body-range)))
-        (setq marker (copy-marker (map-elt body-range :end) t))
-        (agent-shell--tool-call-set-output-marker state tool-call-id marker)
-        (agent-shell--tool-call-set-output-ui-state state tool-call-id (map-elt info :ui-state))))
-    marker))
-
-(defun agent-shell--tool-call-output-text (state tool-call-id)
-  "Return aggregated output for TOOL-CALL-ID from STATE."
-  (let ((chunks (map-nested-elt state `(:tool-calls ,tool-call-id :output-chunks))))
-    (when (and chunks (listp chunks))
-      (mapconcat #'identity (nreverse chunks) ""))))
-
-(defun agent-shell--tool-call-clear-output (state tool-call-id)
-  "Clear aggregated output for TOOL-CALL-ID in STATE."
-  (let* ((tool-calls (map-elt state :tool-calls))
-         (entry (map-elt tool-calls tool-call-id)))
-    (when entry
-      (setf (map-elt entry :output-chunks) nil)
-      (setf (map-elt entry :output-last) nil)
-      (setf (map-elt entry :output-marker) nil)
-      (setf (map-elt entry :output-ui-state) nil)
-      (setf (map-elt tool-calls tool-call-id) entry)
-      (map-put! state :tool-calls tool-calls))))
-
-(defun agent-shell--mark-tool-calls-cancelled (state)
-  "Mark in-flight tool-call entries in STATE as cancelled and update UI."
-  (let ((tool-calls (map-elt state :tool-calls)))
-    (when tool-calls
-      (map-do
-       (lambda (tool-call-id tool-call-data)
-         (let ((status (map-elt tool-call-data :status)))
-           (when (or (not status)
-                     (member status '("pending" "in_progress")))
-             (let ((output-text (or (agent-shell--tool-call-output-text state tool-call-id)
-                                    (agent-shell--tool-call-content-text
-                                     (map-elt tool-call-data :content)))))
-               (agent-shell--handle-tool-call-update
-                state
-                `((toolCallId . ,tool-call-id)
-                  (status . "cancelled"))
-                output-text)
-               (agent-shell--tool-call-clear-output state tool-call-id)))))
-       tool-calls))))
-
-(defun agent-shell--append-tool-call-output (state tool-call-id text)
-  "Append TEXT to TOOL-CALL-ID output body in STATE without formatting."
-  (when (and text (not (string-empty-p text)))
-    (with-current-buffer (map-elt state :buffer)
-      (let* ((inhibit-read-only t)
-             (buffer-undo-list t)
-             (was-at-end (eobp))
-             (saved-point (copy-marker (point) t))
-             (marker (agent-shell--tool-call-ensure-output-marker state tool-call-id))
-             (ui-state (agent-shell--tool-call-output-ui-state state tool-call-id)))
-        (if (not marker)
-            (progn
-              (agent-shell--update-fragment
-               :state state
-               :block-id tool-call-id
-               :body text
-               :append t
-               :navigation 'always)
-              (agent-shell--tool-call-ensure-output-marker state tool-call-id))
-          (goto-char marker)
-          (let ((start (point)))
-            (insert text)
-            (let ((end (point))
-                  (collapsed (and ui-state (map-elt ui-state :collapsed))))
-              (set-marker marker end)
-              (add-text-properties
-               start end
-               (list
-                'read-only t
-                'front-sticky '(read-only)
-                'agent-shell-ui-state ui-state))
-              (when ui-state
-                (let* ((qualified-id (map-elt ui-state :qualified-id))
-                       (key (and qualified-id (concat qualified-id "-body"))))
-                  (when key
-                    (unless agent-shell-ui--content-store
-                      (setq agent-shell-ui--content-store (make-hash-table :test 'equal)))
-                    (puthash key
-                             (concat (or (gethash key agent-shell-ui--content-store) "") text)
-                             agent-shell-ui--content-store))))
-              (when collapsed
-                (add-text-properties start end '(invisible t))))))
-        (if was-at-end
-            (goto-char (point-max))
-          (goto-char saved-point))
-        (set-marker saved-point nil)))))
-
-(defun agent-shell--handle-tool-call-update-streaming (state update)
-  "Stream tool call UPDATE in STATE with minimal formatting."
-  (let* ((tool-call-id (map-elt update 'toolCallId))
-         (status (map-elt update 'status))
-         (meta-response (agent-shell--tool-call-meta-response-text update))
-         (final (member status '("completed" "failed" "cancelled")))
-         (stored-content (map-nested-elt state `(:tool-calls ,tool-call-id :content)))
-         (terminal-ids (agent-shell--tool-call-terminal-ids
-                        (or stored-content (map-elt update 'content)))))
-    (agent-shell--save-tool-call
-     state
-     tool-call-id
-     (agent-shell--tool-call-update-overrides state update nil nil))
-    (cond
-     ;; Non-final meta toolResponse: output in _meta.*.toolResponse
-     ((and meta-response (not final) (not terminal-ids))
-      (let ((chunk (agent-shell--tool-call-normalize-output meta-response)))
-        (when (and chunk (not (string-empty-p chunk)))
-          (agent-shell--tool-call-append-output-chunk state tool-call-id chunk)
-          (agent-shell--append-tool-call-output state tool-call-id chunk))))
-     (final
-      (agent-shell--handle-tool-call-update
-       state
-       update
-       (if terminal-ids
-           nil
-         (or (agent-shell--tool-call-output-text state tool-call-id)
-             (agent-shell--tool-call-content-text (map-elt update 'content)))))
-      (agent-shell--tool-call-clear-output state tool-call-id)))))
-
-(defun agent-shell--handle-tool-call-update (state update &optional output-text)
-  "Handle tool call UPDATE in STATE immediately.
-OUTPUT-TEXT overrides content-derived output."
-  (let-alist update
-    (let* ((stored-content (map-nested-elt state `(:tool-calls ,.toolCallId :content)))
-           (terminal-ids (agent-shell--tool-call-terminal-ids
-                          (or stored-content .content))))
-      ;; Update stored tool call data with new status and content
-      (agent-shell--save-tool-call
-       state
-       .toolCallId
-       (agent-shell--tool-call-update-overrides state update t t))
-      (let* ((diff (map-nested-elt state `(:tool-calls ,.toolCallId :diff)))
-             (content-text (cond
-                            (output-text output-text)
-                            (terminal-ids "")
-                            (t (or (agent-shell--tool-call-content-text .content) ""))))
-           (output (if (string-empty-p content-text)
-                       ""
-                     (concat "
-
-" content-text "
-
-")))
-           (diff-text (agent-shell--format-diff-as-text diff))
-           (body-text (if diff-text
-                          (concat output
-                                  "
-
-"
-                                  "╭─────────╮
-"
-                                  "│ changes │
-"
-                                  "╰─────────╯
-
-" diff-text)
-                        output)))
-      ;; Log tool call to transcript when completed or failed
-      (when (and (map-elt update 'status)
-                 (member (map-elt update 'status)
-                         '("completed" "failed" "cancelled")))
-        (agent-shell--append-transcript
-         :text (agent-shell--make-transcript-tool-call-entry
-                :status (map-elt update 'status)
-                :title (map-nested-elt state `(:tool-calls ,.toolCallId :title))
-                :kind (map-nested-elt state `(:tool-calls ,.toolCallId :kind))
-                :description (map-nested-elt state `(:tool-calls ,.toolCallId :description))
-                :command (map-nested-elt state `(:tool-calls ,.toolCallId :command))
-                :output body-text)
-         :file-path agent-shell--transcript-file))
-      ;; Hide permission after sending response.
-      ;; Status and permission are no longer pending. User
-      ;; likely selected one of: accepted/rejected/always.
-      ;; Remove stale permission dialog.
-      (when (and (map-elt update 'status)
-                 (not (equal (map-elt update 'status) "pending")))
-        ;; block-id must be the same as the one used as
-        ;; agent-shell--update-fragment param by "session/request_permission".
-        (agent-shell--delete-fragment :state state :block-id (format "permission-%s" .toolCallId)))
-      (let ((tool-call-labels (agent-shell-make-tool-call-label
-                               state .toolCallId)))
-        (agent-shell--update-fragment
-         :state state
-         :block-id .toolCallId
-         :label-left (map-elt tool-call-labels :status)
-         :label-right (map-elt tool-call-labels :title)
-         :body (string-trim body-text)
-         :navigation 'always
-         :expanded agent-shell-tool-use-expand-by-default))))))
-
-
 (cl-defun agent-shell--on-request (&key state request)
   "Handle incoming request using SHELL, STATE, and REQUEST."
   (let-alist request
@@ -1662,26 +1422,6 @@ OUTPUT-TEXT overrides content-derived output."
             :request request))
           ((equal .method "fs/write_text_file")
            (agent-shell--on-fs-write-text-file-request
-            :state state
-            :request request))
-          ((equal .method "terminal/create")
-           (agent-shell--on-terminal-create-request
-            :state state
-            :request request))
-          ((equal .method "terminal/output")
-           (agent-shell--on-terminal-output-request
-            :state state
-            :request request))
-          ((equal .method "terminal/wait_for_exit")
-           (agent-shell--on-terminal-wait-for-exit-request
-            :state state
-            :request request))
-          ((equal .method "terminal/kill")
-           (agent-shell--on-terminal-kill-request
-            :state state
-            :request request))
-          ((equal .method "terminal/release")
-           (agent-shell--on-terminal-release-request
             :state state
             :request request))
           (t
@@ -2229,7 +1969,7 @@ DESTINATION-DIR is required and must be provided."
 Returns the full path to the saved image file on success.
 When NO-ERROR is non-nil, return nil instead of signaling errors.
 
-Needs external utilities.  See `agent-shell-clipboard-image-handlers'
+Needs external utilities. See `agent-shell-clipboard-image-handlers'
 for details."
   (unless destination-dir
     (error "Destination-dir is required"))
@@ -2349,6 +2089,7 @@ Returns propertized labels in :status and :title propertized."
                (agent-shell--status-label (map-elt entry 'status)))
              (lambda (entry)
                (map-elt entry 'content)))
+   :separator " "
    :joiner "\n"))
 
 (cl-defun agent-shell--make-button (&key text help kind action keymap)
@@ -3114,20 +2855,10 @@ BINDINGS is a list of alists defining key bindings to display, each with:
 (defun agent-shell--image-type-to-mime (filename)
   "Convert image type from FILENAME to MIME type string.
 Returns a MIME type like \"image/png\" or \"image/jpeg\"."
-  (let* ((type (image-supported-file-p filename))
-         (ext (downcase (or (file-name-extension filename) ""))))
-    (cond
-     (type
-      (pcase type
-        ('svg "image/svg+xml")
-        (_ (format "image/%s" type))))
-     ((member ext '("png" "gif" "webp"))
-      (format "image/%s" ext))
-     ((member ext '("jpg" "jpeg"))
-      "image/jpeg")
-     ((string= ext "svg")
-      "image/svg+xml")
-     (t nil))))
+  (when-let ((type (image-supported-file-p filename)))
+    (pcase type
+      ('svg "image/svg+xml")
+      (_ (format "image/%s" type)))))
 
 (defun agent-shell--update-header-and-mode-line ()
   "Update header and mode line based on `agent-shell-header-style'."
@@ -3457,8 +3188,7 @@ Must provide ON-INITIATED (lambda ())."
                             (title . "Emacs Agent Shell")
                             (version . ,agent-shell--version))
              :read-text-file-capability agent-shell-text-file-capabilities
-             :write-text-file-capability agent-shell-text-file-capabilities
-             :terminal-capability t)
+             :write-text-file-capability agent-shell-text-file-capabilities)
    :on-success (lambda (response)
                  (with-current-buffer shell-buffer
                    (let ((acp-session-capabilities (or (map-elt response 'sessionCapabilities)
@@ -4521,7 +4251,7 @@ When PICK-SHELL is non-nil, prompt for which shell buffer to use."
 (defun agent-shell-send-clipboard-image (&optional pick-shell)
   "Paste clipboard image and insert it into `agent-shell'.
 
-Needs external utilities.  See `agent-shell-clipboard-image-handlers'
+Needs external utilities. See `agent-shell-clipboard-image-handlers'
 for details.
 
 The image is saved to .agent-shell/screenshots in the project root.
@@ -4551,7 +4281,7 @@ When PICK-SHELL is non-nil, prompt for which shell buffer to use."
 If the clipboard contains an image, save it and insert as file context.
 Otherwise, invoke `yank' with ARG as usual.
 
-Needs external utilities.  See `agent-shell-clipboard-image-handlers'
+Needs external utilities. See `agent-shell-clipboard-image-handlers'
 for details."
   (interactive "*P")
   (let* ((screenshots-dir (expand-file-name ".agent-shell/screenshots" (agent-shell-cwd)))
