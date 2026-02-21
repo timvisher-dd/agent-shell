@@ -222,6 +222,18 @@ You can load environment variables from .env files using the `:load-env` paramet
 
 The .env files should contain variables in the format `KEY=value`, with one variable per line. Comments (lines starting with `#`) and empty lines are ignored.
 
+*** Working directory
+
+By default, agent-shell uses the current project root (Projectile or project.el) and falls back to `default-directory`. To override that behavior, customize `agent-shell-cwd-resolver` with either a variable symbol or a function that returns a directory.
+
+#+begin_src emacs-lisp
+;; Use the current buffer directory.
+(setq agent-shell-cwd-resolver 'default-directory)
+
+;; Use a fixed directory.
+(setq agent-shell-cwd-resolver (lambda () (expand-file-name "~/work/")))
+#+end_src
+
 *** Anthropic Claude
 
 For login-based authentication (default):
