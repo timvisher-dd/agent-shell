@@ -113,7 +113,7 @@
   (let ((items (agent-shell--terminal-ensure-list content)))
     (mapcan (lambda (item)
               (let ((type (agent-shell--meta-lookup item 'type)))
-                (when (and (stringp type) (string= type "terminal"))
+                (when (and (stringp type) (equal type "terminal"))
                   (let ((terminal-id (agent-shell--meta-lookup item 'terminalId)))
                     (when (stringp terminal-id)
                       (list terminal-id))))))
