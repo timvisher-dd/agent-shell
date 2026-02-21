@@ -33,31 +33,10 @@
 (require 'map)
 (require 'seq)
 (require 'subr-x)
+(require 'agent-shell-core)
+(require 'agent-shell-terminal)
+(require 'agent-shell-ui-helpers)
 (require 'agent-shell-meta)
-(require 'agent-shell-ui)
-
-(declare-function agent-shell--make-diff-info "agent-shell")
-(declare-function agent-shell--format-diff-as-text "agent-shell")
-(declare-function agent-shell--ensure-transcript-file "agent-shell")
-(declare-function agent-shell--delete-fragment "agent-shell")
-(declare-function agent-shell--update-fragment "agent-shell")
-(declare-function agent-shell-make-tool-call-label "agent-shell")
-(declare-function agent-shell--terminal-unlink-tool-call-content "agent-shell-terminal")
-(declare-function agent-shell--tool-call-terminal-output-data "agent-shell-meta")
-
-(defvar agent-shell-tool-use-expand-by-default)
-(defvar agent-shell--transcript-file)
-(defvar agent-shell-ui--content-store)
-
-(defun agent-shell--tool-call-command-to-string (command)
-  "Normalize tool call COMMAND to a display string.
-
-COMMAND, when present, may be a shell command string or an argv vector."
-  (cond ((stringp command) command)
-        ((vectorp command)
-         (combine-and-quote-strings (append command nil)))
-        ((null command) nil)
-        (t (error "Unexpected tool-call command type: %S" (type-of command)))))
 
 (defun agent-shell--tool-call-content-text (content)
   "Return concatenated text from tool call CONTENT items."
@@ -122,94 +101,6 @@ INCLUDE-CONTENT and INCLUDE-DIFF control optional fields."
             tool-call-overrides))
     (map-put! state :tool-calls updated-tools)))
 
-(defun agent-shell--tool-call-append-output-chunk (state tool-call-id chunk)
-  "Append CHUNK to tool call output buffer for TOOL-CALL-ID in STATE."
-  (let* ((tool-calls (map-elt state :tool-calls))
-         (entry (or (map-elt tool-calls tool-call-id) (list)))
-         (chunks (map-elt entry :output-chunks)))
-    (setf (map-elt entry :output-chunks) (cons chunk chunks))
-    (setf (map-elt tool-calls tool-call-id) entry)
-    (map-put! state :tool-calls tool-calls)))
-
-(defun agent-shell--tool-call-output-marker (state tool-call-id)
-  "Return output marker for TOOL-CALL-ID in STATE."
-  (map-nested-elt state `(:tool-calls ,tool-call-id :output-marker)))
-
-(defun agent-shell--tool-call-output-ui-state (state tool-call-id)
-  "Return cached UI state for TOOL-CALL-ID in STATE."
-  (map-nested-elt state `(:tool-calls ,tool-call-id :output-ui-state)))
-
-(defun agent-shell--tool-call-set-output-marker (state tool-call-id marker)
-  "Set output MARKER for TOOL-CALL-ID in STATE."
-  (let* ((tool-calls (map-elt state :tool-calls))
-         (entry (or (map-elt tool-calls tool-call-id) (list))))
-    (setf (map-elt entry :output-marker) marker)
-    (setf (map-elt tool-calls tool-call-id) entry)
-    (map-put! state :tool-calls tool-calls)))
-
-(defun agent-shell--tool-call-set-output-ui-state (state tool-call-id ui-state)
-  "Set cached UI-STATE for TOOL-CALL-ID in STATE."
-  (let* ((tool-calls (map-elt state :tool-calls))
-         (entry (or (map-elt tool-calls tool-call-id) (list))))
-    (setf (map-elt entry :output-ui-state) ui-state)
-    (setf (map-elt tool-calls tool-call-id) entry)
-    (map-put! state :tool-calls tool-calls)))
-
-(defun agent-shell--tool-call-body-range-info (state tool-call-id)
-  "Return tool call body range info for TOOL-CALL-ID in STATE."
-  (when-let ((buffer (map-elt state :buffer)))
-    (with-current-buffer buffer
-      (let* ((qualified-id (format "%s-%s" (map-elt state :request-count) tool-call-id))
-             (match (save-mark-and-excursion
-                      (goto-char (point-max))
-                      (text-property-search-backward
-                       'agent-shell-ui-state nil
-                       (lambda (_ state)
-                         (equal (map-elt state :qualified-id) qualified-id))
-                       t))))
-        (when match
-          (let* ((block-start (prop-match-beginning match))
-                 (block-end (prop-match-end match))
-                 (ui-state (get-text-property block-start 'agent-shell-ui-state))
-                 (body-range (agent-shell-ui--nearest-range-matching-property
-                              :property 'agent-shell-ui-section :value 'body
-                              :from block-start :to block-end)))
-            (list (cons :ui-state ui-state)
-                  (cons :body-range body-range))))))))
-
-(defun agent-shell--tool-call-ensure-output-marker (state tool-call-id)
-  "Ensure an output marker exists for TOOL-CALL-ID in STATE."
-  (let* ((buffer (map-elt state :buffer))
-         (marker (agent-shell--tool-call-output-marker state tool-call-id)))
-    (when (or (not (markerp marker))
-              (not (eq (marker-buffer marker) buffer)))
-      (setq marker nil))
-    (unless marker
-      (when-let ((info (agent-shell--tool-call-body-range-info state tool-call-id))
-                 (body-range (map-elt info :body-range)))
-        (setq marker (copy-marker (map-elt body-range :end) t))
-        (agent-shell--tool-call-set-output-marker state tool-call-id marker)
-        (agent-shell--tool-call-set-output-ui-state state tool-call-id (map-elt info :ui-state))))
-    marker))
-
-(defun agent-shell--tool-call-output-text (state tool-call-id)
-  "Return aggregated output for TOOL-CALL-ID from STATE."
-  (let ((chunks (map-nested-elt state `(:tool-calls ,tool-call-id :output-chunks))))
-    (when (and chunks (listp chunks))
-      (mapconcat #'identity (nreverse chunks) ""))))
-
-(defun agent-shell--tool-call-clear-output (state tool-call-id)
-  "Clear aggregated output for TOOL-CALL-ID in STATE."
-  (let* ((tool-calls (map-elt state :tool-calls))
-         (entry (map-elt tool-calls tool-call-id)))
-    (when entry
-      (setf (map-elt entry :output-chunks) nil)
-      (setf (map-elt entry :output-last) nil)
-      (setf (map-elt entry :output-marker) nil)
-      (setf (map-elt entry :output-ui-state) nil)
-      (setf (map-elt tool-calls tool-call-id) entry)
-      (map-put! state :tool-calls tool-calls))))
-
 (defun agent-shell--mark-tool-calls-cancelled (state)
   "Mark in-flight tool-call entries in STATE as cancelled and update UI."
   (let ((tool-calls (map-elt state :tool-calls)))
@@ -229,57 +120,6 @@ INCLUDE-CONTENT and INCLUDE-DIFF control optional fields."
                 output-text)
                (agent-shell--tool-call-clear-output state tool-call-id)))))
        tool-calls))))
-
-(defun agent-shell--append-tool-call-output (state tool-call-id text)
-  "Append TEXT to TOOL-CALL-ID output body in STATE without formatting."
-  (when (and text (not (string-empty-p text)))
-    (with-current-buffer (map-elt state :buffer)
-      (let* ((inhibit-read-only t)
-             (buffer-undo-list t)
-             (was-at-end (eobp))
-             (saved-point (copy-marker (point) t))
-             (marker (agent-shell--tool-call-ensure-output-marker state tool-call-id))
-             (ui-state (agent-shell--tool-call-output-ui-state state tool-call-id))
-             (store-output (lambda (state)
-                             (when state
-                               (let* ((qualified-id (map-elt state :qualified-id))
-                                      (key (and qualified-id (concat qualified-id "-body"))))
-                                 (when key
-                                   (unless agent-shell-ui--content-store
-                                     (setq agent-shell-ui--content-store (make-hash-table :test 'equal)))
-                                   (puthash key
-                                            (concat (or (gethash key agent-shell-ui--content-store) "") text)
-                                            agent-shell-ui--content-store)))))))
-        (if (not marker)
-            (progn
-              (agent-shell--update-fragment
-               :state state
-               :block-id tool-call-id
-               :body text
-               :append t
-               :navigation 'always)
-              (agent-shell--tool-call-ensure-output-marker state tool-call-id)
-              (setq ui-state (agent-shell--tool-call-output-ui-state state tool-call-id))
-              (funcall store-output ui-state))
-          (goto-char marker)
-          (let ((start (point)))
-            (insert text)
-            (let ((end (point))
-                  (collapsed (and ui-state (map-elt ui-state :collapsed))))
-              (set-marker marker end)
-              (add-text-properties
-               start end
-               (list
-                'read-only t
-                'front-sticky '(read-only)
-                'agent-shell-ui-state ui-state))
-              (funcall store-output ui-state)
-              (when collapsed
-                (add-text-properties start end '(invisible t))))))
-        (if was-at-end
-            (goto-char (point-max))
-          (goto-char saved-point))
-        (set-marker saved-point nil)))))
 
 
 (defun agent-shell--handle-tool-call-update-streaming (state update)
