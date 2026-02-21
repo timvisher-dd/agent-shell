@@ -33,7 +33,7 @@
   (require 'cl-lib))
 (require 'map)
 (require 'subr-x)
-(require 'agent-shell-core)
+(require 'agent-shell-helpers)
 (require 'agent-shell-project)
 (require 'agent-shell-ui-helpers)
 (require 'agent-shell-meta)

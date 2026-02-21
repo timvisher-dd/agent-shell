@@ -1,4 +1,4 @@
-;;; agent-shell-core.el --- Core utilities for agent-shell -*- lexical-binding: t; -*-
+;;; agent-shell-helpers.el --- Helper utilities for agent-shell -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2024 Alvaro Ramirez
 
@@ -20,7 +20,7 @@
 
 ;;; Commentary:
 ;;
-;; Core utilities shared across agent-shell modules.
+;; Helper utilities shared across agent-shell modules.
 ;;
 ;; Report issues at https://github.com/xenodium/agent-shell/issues
 ;;
@@ -440,6 +440,6 @@ COMMAND, when present, may be a shell command string or an argv vector."
         ((null command) nil)
         (t (error "Unexpected tool-call command type: %S" (type-of command)))))
 
-(provide 'agent-shell-core)
+(provide 'agent-shell-helpers)
 
-;;; agent-shell-core.el ends here
+;;; agent-shell-helpers.el ends here

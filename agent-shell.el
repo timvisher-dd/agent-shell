@@ -45,7 +45,7 @@
 (require 'dired)
 (require 'json)
 (require 'map)
-(require 'agent-shell-core)
+(require 'agent-shell-helpers)
 (require 'agent-shell-ui-helpers)
 
 ;; Optional Flycheck APIs used for error context.

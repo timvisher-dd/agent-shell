@@ -33,7 +33,7 @@
 (require 'map)
 (require 'seq)
 (require 'subr-x)
-(require 'agent-shell-core)
+(require 'agent-shell-helpers)
 (require 'agent-shell-terminal)
 (require 'agent-shell-ui-helpers)
 (require 'agent-shell-meta)

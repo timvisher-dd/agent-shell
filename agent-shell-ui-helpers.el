@@ -37,7 +37,7 @@
 (require 'markdown-overlays)
 (require 'shell-maker)
 
-(require 'agent-shell-core)
+(require 'agent-shell-helpers)
 (require 'agent-shell-diff)
 (require 'agent-shell-project)
 (require 'agent-shell-ui)
