@@ -109,6 +109,52 @@ Binds BUFFER, OUTPUT-BUFFER, TERMINAL-ID, and STATE, then cleans up."
     (should-not (agent-shell--tool-call-output-text agent-shell--state
                                                     "call-no-chunks"))))
 
+(ert-deftest agent-shell--terminal-output-prunes-final-tool-calls-test ()
+  "Finalized tool calls no longer receive terminal output."
+  (agent-shell--with-terminal-test-fixture buffer output-buffer terminal-id agent-shell--state
+    (with-current-buffer buffer
+      (agent-shell--on-notification
+       :state agent-shell--state
+       :notification `((method . "session/update")
+                       (params . ((update . ((sessionUpdate . "tool_call")
+                                              (toolCallId . "call-1")
+                                              (status . "in_progress")
+                                              (title . "Terminal")
+                                              (kind . "tool")
+                                              (content . [((type . "terminal")
+                                                           (terminalId . ,terminal-id))]))))))))
+      (agent-shell--on-notification
+       :state agent-shell--state
+       :notification `((method . "session/update")
+                       (params . ((update . ((sessionUpdate . "tool_call")
+                                              (toolCallId . "call-2")
+                                              (status . "in_progress")
+                                              (title . "Terminal")
+                                              (kind . "tool")
+                                              (content . [((type . "terminal")
+                                                           (terminalId . ,terminal-id))])))))))))
+    (agent-shell--terminal-handle-output
+     agent-shell--state
+     terminal-id
+     "chunk-1")
+    (should (equal (agent-shell--tool-call-output-text agent-shell--state "call-1")
+                   "chunk-1"))
+    (should (equal (agent-shell--tool-call-output-text agent-shell--state "call-2")
+                   "chunk-1"))
+    (agent-shell--handle-tool-call-update-streaming
+     agent-shell--state
+     `((toolCallId . "call-1")
+       (status . "completed")))
+    (agent-shell--terminal-handle-output
+     agent-shell--state
+     terminal-id
+     "chunk-2")
+    (should (equal (agent-shell--tool-call-output-text agent-shell--state "call-1")
+                   "chunk-1"))
+    (should (equal (agent-shell--tool-call-output-text agent-shell--state "call-2")
+                   "chunk-1chunk-2"))))
+
+
 (ert-deftest agent-shell--terminal-final-update-ignores-agent-content-test ()
   "Final tool_call_update ignores agent content for terminal tool calls."
   (agent-shell--with-terminal-test-fixture buffer output-buffer terminal-id agent-shell--state
@@ -408,6 +454,38 @@ Binds BUFFER, OUTPUT-BUFFER, TERMINAL-ID, and STATE, then cleans up."
         (kill-buffer buffer))
       (when (file-directory-p temp-dir)
         (delete-directory temp-dir t)))))
+
+(ert-deftest agent-shell--terminal-output-slice-multibyte-test ()
+  "Ensure outputByteLimit truncation respects multibyte boundaries."
+  (let* ((output-buffer (generate-new-buffer " *agent-shell-terminal-output-slice*"))
+         (rocket (char-to-string #x1F680))
+         (terminal (list :output-buffer output-buffer :output-byte-limit 2)))
+    (unwind-protect
+        (with-current-buffer output-buffer
+          (erase-buffer)
+          (insert "A" rocket "B")
+          (dolist (limit '(2 3 4))
+            (setf (map-elt terminal :output-byte-limit) limit)
+            (pcase-let ((`(,output . ,truncated)
+                         (agent-shell--terminal-output-slice terminal)))
+              (should (equal output "B"))
+              (should (eq truncated t))
+              (should (<= (string-bytes output) limit))))
+          (setf (map-elt terminal :output-byte-limit) 5)
+          (pcase-let ((`(,output . ,truncated)
+                       (agent-shell--terminal-output-slice terminal)))
+            (should (equal output (concat rocket "B")))
+            (should (eq truncated t))
+            (should (<= (string-bytes output) 5)))
+          (setf (map-elt terminal :output-byte-limit) 6)
+          (pcase-let ((`(,output . ,truncated)
+                       (agent-shell--terminal-output-slice terminal)))
+            (should (equal output (concat "A" rocket "B")))
+            (should (eq truncated nil))
+            (should (<= (string-bytes output) 6))))
+      (when (buffer-live-p output-buffer)
+        (kill-buffer output-buffer)))))
+
 
 (ert-deftest agent-shell--terminal-wait-for-exit-test ()
   "Wait for a terminal process to exit and report status."

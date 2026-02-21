@@ -1563,7 +1563,12 @@ INCLUDE-CONTENT and INCLUDE-DIFF control optional fields."
   "Handle tool call UPDATE in STATE immediately.
 OUTPUT-TEXT overrides content-derived output."
   (let-alist update
-    (let ((has-terminal (map-nested-elt state `(:tool-calls ,.toolCallId :has-terminal))))
+    (let* ((status (map-elt update 'status))
+           (has-terminal (map-nested-elt state `(:tool-calls ,.toolCallId :has-terminal)))
+           (terminal-content (or .content
+                                 (map-nested-elt state `(:tool-calls ,.toolCallId :content))))
+           (final (and status
+                       (member status '("completed" "failed" "cancelled")))))
       ;; Update stored tool call data with new status and content
       (agent-shell--save-tool-call
        state
@@ -1595,14 +1600,18 @@ OUTPUT-TEXT overrides content-derived output."
 
 "
                                     diff-text)
-                          output)))
+                          output))
+             (body (let ((trimmed (string-trim body-text)))
+                     (if (and has-terminal (string-empty-p trimmed))
+                         nil
+                       trimmed))))
         ;; Log tool call to transcript when completed or failed
-        (when (and (map-elt update 'status)
-                   (member (map-elt update 'status)
-                           '("completed" "failed" "cancelled")))
+        (when final
+          (agent-shell--terminal-unlink-tool-call-content
+           state .toolCallId terminal-content)
           (agent-shell--append-transcript
            :text (agent-shell--make-transcript-tool-call-entry
-                  :status (map-elt update 'status)
+                  :status status
                   :title (map-nested-elt state `(:tool-calls ,.toolCallId :title))
                   :kind (map-nested-elt state `(:tool-calls ,.toolCallId :kind))
                   :description (map-nested-elt state `(:tool-calls ,.toolCallId :description))
@@ -1613,8 +1622,8 @@ OUTPUT-TEXT overrides content-derived output."
         ;; Status and permission are no longer pending. User
         ;; likely selected one of: accepted/rejected/always.
         ;; Remove stale permission dialog.
-        (when (and (map-elt update 'status)
-                   (not (equal (map-elt update 'status) "pending")))
+        (when (and status
+                   (not (equal status "pending")))
           ;; block-id must be the same as the one used as
           ;; agent-shell--update-fragment param by "session/request_permission".
           (agent-shell--delete-fragment :state state :block-id (format "permission-%s" .toolCallId)))
@@ -1625,7 +1634,7 @@ OUTPUT-TEXT overrides content-derived output."
            :block-id .toolCallId
            :label-left (map-elt tool-call-labels :status)
            :label-right (map-elt tool-call-labels :title)
-           :body (string-trim body-text)
+           :body body
            :navigation 'always
            :expanded agent-shell-tool-use-expand-by-default))))))
 

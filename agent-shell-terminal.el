@@ -142,6 +142,21 @@
   (dolist (terminal-id (agent-shell--tool-call-terminal-ids content))
     (agent-shell--terminal-link-tool-call state terminal-id tool-call-id)))
 
+(defun agent-shell--terminal-unlink-tool-call (state terminal-id tool-call-id)
+  "Remove TOOL-CALL-ID from TERMINAL-ID in STATE."
+  (when (and (stringp terminal-id) (stringp tool-call-id))
+    (when-let ((terminal (agent-shell--terminal-get state terminal-id)))
+      (let* ((tool-call-ids (map-elt terminal :tool-call-ids))
+             (updated-ids (remove tool-call-id tool-call-ids)))
+        (unless (equal tool-call-ids updated-ids)
+          (setf (map-elt terminal :tool-call-ids) updated-ids)
+          (agent-shell--terminal-put state terminal-id terminal))))))
+
+(defun agent-shell--terminal-unlink-tool-call-content (state tool-call-id content)
+  "Unlink TOOL-CALL-ID from any terminals referenced in CONTENT for STATE."
+  (dolist (terminal-id (agent-shell--tool-call-terminal-ids content))
+    (agent-shell--terminal-unlink-tool-call state terminal-id tool-call-id)))
+
 (defun agent-shell--terminal-handle-output (state terminal-id output)
   "Handle OUTPUT from TERMINAL-ID in STATE by recording and streaming."
   (when (and (stringp output) (not (string-empty-p output)))
@@ -192,6 +207,9 @@ truncated if any bytes were present."
                 (let* ((excess (- bytes limit))
                        (cutoff-byte (+ min-bytes excess))
                        (cutoff-pos (or (byte-to-position cutoff-byte) min)))
+                  (when (and (< (position-bytes cutoff-pos) cutoff-byte)
+                             (< cutoff-pos max))
+                    (setq cutoff-pos (1+ cutoff-pos)))
                   (cons (buffer-substring-no-properties cutoff-pos max) t)))))))))))
 
 (defun agent-shell--terminal-signal-name (code)
