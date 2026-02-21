@@ -30,11 +30,11 @@
 (require 'shell-maker)
 (require 'acp)
 
-(declare-function agent-shell--indent-string "agent-shell")
-(declare-function agent-shell--interpolate-gradient "agent-shell")
-(declare-function agent-shell--make-acp-client "agent-shell")
-(declare-function agent-shell-make-agent-config "agent-shell")
-(autoload 'agent-shell-make-agent-config "agent-shell")
+(declare-function agent-shell--indent-string "agent-shell-helpers")
+(declare-function agent-shell--interpolate-gradient "agent-shell-helpers")
+(declare-function agent-shell--make-acp-client "agent-shell-helpers")
+(declare-function agent-shell-make-agent-config "agent-shell-helpers")
+(autoload 'agent-shell-make-agent-config "agent-shell-helpers")
 (declare-function agent-shell--dwim "agent-shell")
 
 (cl-defun agent-shell-qwen-make-authentication (&key login none)

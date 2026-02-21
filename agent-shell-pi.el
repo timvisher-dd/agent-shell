@@ -35,10 +35,10 @@
 (require 'shell-maker)
 (require 'acp)
 
-(declare-function agent-shell--indent-string "agent-shell")
-(declare-function agent-shell-make-agent-config "agent-shell")
-(autoload 'agent-shell-make-agent-config "agent-shell")
-(declare-function agent-shell--make-acp-client "agent-shell")
+(declare-function agent-shell--indent-string "agent-shell-helpers")
+(declare-function agent-shell-make-agent-config "agent-shell-helpers")
+(autoload 'agent-shell-make-agent-config "agent-shell-helpers")
+(declare-function agent-shell--make-acp-client "agent-shell-helpers")
 (declare-function agent-shell--dwim "agent-shell")
 
 (defcustom agent-shell-pi-acp-command
