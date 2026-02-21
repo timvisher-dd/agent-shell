@@ -105,11 +105,7 @@
 (defun agent-shell--terminal-output-buffer (terminal)
   "Return live output buffer for TERMINAL."
   (let ((buffer (map-elt terminal :output-buffer)))
-    (or (and (buffer-live-p buffer) buffer)
-        (when-let* ((proc (map-elt terminal :process))
-                    (proc-buffer (process-buffer proc)))
-          (and (buffer-live-p proc-buffer)
-               proc-buffer)))))
+    (when (buffer-live-p buffer) buffer)))
 
 
 (defun agent-shell--tool-call-terminal-ids (content)
