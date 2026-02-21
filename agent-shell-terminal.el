@@ -121,8 +121,7 @@
 
 (defun agent-shell--terminal-stream-output (state tool-call-id output)
   "Stream terminal OUTPUT into tool call TOOL-CALL-ID in STATE."
-  (when (and (stringp output) (not (string-empty-p output)))
-    (agent-shell--append-tool-call-output state tool-call-id output)))
+  (agent-shell--append-tool-call-output state tool-call-id output))
 
 (defun agent-shell--terminal-link-tool-call (state terminal-id tool-call-id)
   "Associate TERMINAL-ID with TOOL-CALL-ID in STATE and stream existing output."
