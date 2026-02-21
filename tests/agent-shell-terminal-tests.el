@@ -294,7 +294,7 @@ Binds BUFFER, OUTPUT-BUFFER, TERMINAL-ID, and STATE, then cleans up."
      terminal-id
      "second")
     (with-current-buffer buffer
-      (should (string-match-p "first\(?:.\|\n\)*second" (buffer-string))))))
+      (should (string-match-p "first\\(?:.\\|\\n\\)*second" (buffer-string))))))
 
 (ert-deftest agent-shell--terminal-release-cleanup-after-inactivity-test ()
   "Released terminals are cleaned up after inactivity."
