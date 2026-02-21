@@ -1556,7 +1556,8 @@ INCLUDE-CONTENT and INCLUDE-DIFF control optional fields."
            nil
          (or (agent-shell--tool-call-output-text state tool-call-id)
              (agent-shell--tool-call-content-text (map-elt update 'content)))))
-      (agent-shell--tool-call-clear-output state tool-call-id)))))
+      (unless has-terminal
+        (agent-shell--tool-call-clear-output state tool-call-id))))))
 
 (defun agent-shell--handle-tool-call-update (state update &optional output-text)
   "Handle tool call UPDATE in STATE immediately.
