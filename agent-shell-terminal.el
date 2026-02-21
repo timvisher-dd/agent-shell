@@ -36,7 +36,6 @@
 (require 'agent-shell-core)
 (require 'agent-shell-project)
 (require 'agent-shell-ui-helpers)
-(require 'agent-shell-usage)
 (require 'agent-shell-meta)
 
 (defun agent-shell--terminal-next-id (state)
@@ -247,7 +246,8 @@ truncated if any bytes were present."
 
 (defun agent-shell--terminal-touch (state terminal-id &optional terminal)
   "Record terminal access for TERMINAL-ID in STATE.
-Refresh cleanup timer when released."  (when-let ((entry (or terminal (agent-shell--terminal-get state terminal-id))))
+Refresh cleanup timer when released."
+  (when-let ((entry (or terminal (agent-shell--terminal-get state terminal-id))))
     (setf (map-elt entry :last-access) (float-time))
     (agent-shell--terminal-put state terminal-id entry)
     (when (map-elt entry :released)
@@ -267,7 +267,8 @@ Refresh cleanup timer when released."  (when-let ((entry (or terminal (agent-she
       (agent-shell--terminal-finalize state terminal-id))))
 
 (defun agent-shell--terminal-schedule-cleanup (state terminal-id &optional terminal)
-  "Schedule cleanup for TERMINAL-ID in STATE after inactivity."  (when-let* ((buffer (map-elt state :buffer))
+  "Schedule cleanup for TERMINAL-ID in STATE after inactivity."
+  (when-let* ((buffer (map-elt state :buffer))
               (entry (or terminal (agent-shell--terminal-get state terminal-id))))
     (when (map-elt entry :released)
       (when-let ((timer (map-elt entry :cleanup-timer)))
