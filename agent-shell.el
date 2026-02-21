@@ -4295,39 +4295,6 @@ For example:
        (message "Failed to generate transcript path: %S" err)
        nil))))
 
-(defun agent-shell--ensure-transcript-file ()
-  "Ensure the transcript file exists, creating it with header if needed.
-Returns the file path, or nil if disabled."
-  (unless (derived-mode-p 'agent-shell-mode)
-    (user-error "Not in an agent-shell buffer"))
-  (when-let* ((filepath agent-shell--transcript-file)
-              (dir (file-name-directory filepath)))
-    (unless (file-exists-p filepath)
-      (condition-case err
-          (let ((agent-name (or (map-nested-elt agent-shell--state '(:agent-config :mode-line-name))
-                                (map-nested-elt agent-shell--state '(:agent-config :buffer-name))
-                                "Unknown Agent")))
-            (make-directory dir t)
-            (write-region
-             (format "# Agent Shell Transcript
-
-**Agent:** %s
-**Started:** %s
-**Working Directory:** %s
-
----
-
-"
-                     agent-name
-                     (format-time-string "%F %T")
-                     (agent-shell-cwd))
-             nil filepath nil 'no-message)
-            (message "Created %s"
-                     (agent-shell--shorten-paths filepath t)))
-        (error
-         (message "Failed to initialize transcript: %S" err))))
-    filepath))
-
 (defun agent-shell-open-transcript ()
   "Open the transcript file for the current `agent-shell' buffer."
   (interactive)

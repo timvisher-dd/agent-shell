@@ -287,7 +287,7 @@ joined string if JOINER is provided."
 TOOL-CALL is an ACP tool call object that may contain diff info in
 either `content' (standard ACP format) or `rawInput' (eg.  Copilot).
 
-Standard ACP format uses content with type "diff" containing
+Standard ACP format uses content with type \"diff\" containing
 oldText/newText/path fields.
 
 See https://agentclientprotocol.com/protocol/schema#toolcallcontent

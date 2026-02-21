@@ -104,6 +104,7 @@ See https://github.com/xenodium/agent-shell/issues/119"
   :group 'agent-shell)
 
 (defvar agent-shell-ui--content-store)
+(defvar agent-shell-mode-map)
 
 (defun agent-shell--add-text-properties (string &rest properties)
   "Add text PROPERTIES to entire STRING and return the propertized string.
@@ -161,6 +162,39 @@ With INCLUDE-PROJECT
                                            cwd)) "/")
                                 ""
                                 (or text "")))))
+
+(defun agent-shell--ensure-transcript-file ()
+  "Ensure the transcript file exists, creating it with header if needed.
+Returns the file path, or nil if disabled."
+  (unless (derived-mode-p 'agent-shell-mode)
+    (user-error "Not in an agent-shell buffer"))
+  (when-let* ((filepath agent-shell--transcript-file)
+              (dir (file-name-directory filepath)))
+    (unless (file-exists-p filepath)
+      (condition-case err
+          (let ((agent-name (or (map-nested-elt agent-shell--state '(:agent-config :mode-line-name))
+                                (map-nested-elt agent-shell--state '(:agent-config :buffer-name))
+                                "Unknown Agent")))
+            (make-directory dir t)
+            (write-region
+             (format "# Agent Shell Transcript
+
+**Agent:** %s
+**Started:** %s
+**Working Directory:** %s
+
+---
+
+"
+                     agent-name
+                     (format-time-string "%F %T")
+                     (agent-shell-cwd))
+             nil filepath nil 'no-message)
+            (message "Created %s"
+                     (agent-shell--shorten-paths filepath t)))
+        (error
+         (message "Failed to initialize transcript: %S" err))))
+    filepath))
 
 (defun agent-shell-make-tool-call-label (state tool-call-id)
   "Create tool call label from STATE using TOOL-CALL-ID.
@@ -841,7 +875,7 @@ ACTIONS as per `agent-shell--make-permission-action'."
 
 For example:
 
-  "[ Allow (y) ]"
+  [ Allow (y) ]
 
 When NAVIGATABLE is non-nil, make button character navigatable.
 CHAR and OPTION are used for cursor sensor messages."
@@ -899,21 +933,21 @@ ACP-OPTION should be a PermissionOption per ACP spec:
 
   https://agentclientprotocol.com/protocol/schema#permissionoption
 
-  An alist of the form:
+An alist of the form:
 
-  ((\='kind . "allow_once")
-   (\='name . "Allow")
-   (\='optionId . "allow"))
+  ((\='kind . \"allow_once\")
+   (\='name . \"Allow\")
+   (\='optionId . \"allow\"))
 
 ACP-SEEN-KINDS is a list of kinds already processed.  If kind is in
 ACP-SEEN-KINDS, omit the keybinding to avoid duplicates.
 
 Returns an alist of the form:
 
-  ((:label . "Allow (y)")
-   (:option . "Allow")
+  ((:label . \"Allow (y)\")
+   (:option . \"Allow\")
    (:char . ?y)
-   (:kind . "allow_once")
+   (:kind . \"allow_once\")
    (:option-id . ...))
 
 Returns nil if the ACP-OPTION kind is not recognized."
@@ -935,6 +969,36 @@ Returns nil if the ACP-OPTION kind is not recognized."
                   (:option-id . ,(map-elt acp-option 'optionId)))
                 'alist))))
 
+(defun agent-shell-next-permission-button ()
+  "Jump to the next button."
+  (interactive)
+  (when-let* ((found (save-mark-and-excursion
+                       (when (get-text-property (point) 'agent-shell-permission-button)
+                         (when-let ((next-change (next-single-property-change
+                                                  (point) 'agent-shell-permission-button)))
+                           (goto-char next-change)))
+                       (when-let ((next (text-property-search-forward
+                                         'agent-shell-permission-button t t)))
+                         (prop-match-beginning next)))))
+    (deactivate-mark)
+    (goto-char found)
+    found))
+
+(defun agent-shell-previous-permission-button ()
+  "Jump to the previous button."
+  (interactive)
+  (when-let* ((found (save-mark-and-excursion
+                       (when (get-text-property (point) 'agent-shell-permission-button)
+                         (when-let ((prev-change (previous-single-property-change
+                                                  (point) 'agent-shell-permission-button)))
+                           (goto-char prev-change)))
+                       (when-let ((prev (text-property-search-backward
+                                         'agent-shell-permission-button t t)))
+                         (prop-match-beginning prev)))))
+    (deactivate-mark)
+    (goto-char found)
+    found))
+
 (defun agent-shell-jump-to-latest-permission-button-row ()
   "Jump to the latest permission button row.
 
@@ -942,13 +1006,11 @@ Returns non-nil if a permission button was found, nil otherwise."
   (interactive)
   (when-let ((found (save-mark-and-excursion
                       (goto-char (point-max))
-                      (when (fboundp 'agent-shell-previous-permission-button)
-                        (funcall #'agent-shell-previous-permission-button)))))
+                      (agent-shell-previous-permission-button))))
     (deactivate-mark)
     (goto-char found)
     (beginning-of-line)
-    (when (fboundp 'agent-shell-next-permission-button)
-      (funcall #'agent-shell-next-permission-button))
+    (agent-shell-next-permission-button)
     (when-let ((window (get-buffer-window (current-buffer))))
       (set-window-point window (point)))
     t))
