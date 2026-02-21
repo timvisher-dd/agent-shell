@@ -679,7 +679,7 @@ output with spaces
 ```
 ")))
 
-    ;; Test that code blocks in output are stripped
+    ;; Test that code blocks in output are stripped and output containing backtick fences gets a longer outer fence
     (let ((entry (agent-shell--make-transcript-tool-call-entry
                   :status "completed"
                   :title "test"
@@ -690,12 +690,14 @@ output with spaces
 
 **Timestamp:** 2025-11-02 18:17:41
 
+````
 ```
 code block content
 ```
+````
 ")))
 
-    ;; Test that code blocks in output are stripped
+    ;; Test that output containing backtick fences with whitespace is trimmed and output containing backtick fences gets a longer outer fence
     (let ((entry (agent-shell--make-transcript-tool-call-entry
                   :status "completed"
                   :title "test"
@@ -706,10 +708,38 @@ code block content
 
 **Timestamp:** 2025-11-02 18:17:41
 
+````
 ```
 code block content with spaces
 ```
+````
+")))
+
+    ;; Test output with 4-backtick fences gets 5-backtick outer fence
+    (let ((entry (agent-shell--make-transcript-tool-call-entry
+                  :status "completed"
+                  :title "test"
+                  :output "````\ncode block content\n````")))
+      (should (equal entry "\n\n### Tool Call [completed]: test
+
+**Timestamp:** 2025-11-02 18:17:41
+
+`````
+````
+code block content
+````
+`````
 ")))))
+
+(ert-deftest agent-shell--longest-backtick-run-test ()
+  "Test `agent-shell--longest-backtick-run'."
+  (should (= (agent-shell--longest-backtick-run "") 0))
+  (should (= (agent-shell--longest-backtick-run "no backticks here") 0))
+  (should (= (agent-shell--longest-backtick-run "has `one` inline") 1))
+  (should (= (agent-shell--longest-backtick-run "has ``` three") 3))
+  (should (= (agent-shell--longest-backtick-run "```elisp\n(foo)\n```") 3))
+  (should (= (agent-shell--longest-backtick-run "has ```` four and ``` three") 4))
+  (should (= (agent-shell--longest-backtick-run "``````") 6)))
 
 (ert-deftest agent-shell-mcp-servers-test ()
   "Test `agent-shell-mcp-servers' function normalization."

@@ -5598,30 +5598,49 @@ returns:
              params
              "\n")))
 
+(defun agent-shell--longest-backtick-run (text)
+  "Return the length of the longest consecutive backtick sequence in TEXT.
+
+For example:
+
+  (agent-shell--longest-backtick-run \"no backticks\")
+    => 0
+  (agent-shell--longest-backtick-run \"has ``` three\")
+    => 3
+  (agent-shell--longest-backtick-run \"has ```` four and ``` three\")
+    => 4"
+  (let ((pos 0)
+        (max-run 0))
+    (while (string-match "`+" text pos)
+      (setq max-run (max max-run (- (match-end 0) (match-beginning 0)))
+            pos (match-end 0)))
+    max-run))
+
 (cl-defun agent-shell--make-transcript-tool-call-entry (&key status title kind description command parameters output)
   "Create a formatted transcript entry for a tool call.
 
 Includes STATUS, TITLE, KIND, DESCRIPTION, COMMAND, PARAMETERS, and OUTPUT."
-  (concat
-   (format "\n\n### Tool Call [%s]: %s\n"
-           (or status "no status") (or title ""))
-   (when kind
-     (format "\n**Tool:** %s" kind))
-   (format "\n**Timestamp:** %s" (format-time-string "%F %T"))
-   (when description
-     (format "\n**Description:** %s" description))
-   (when command
-     (format "\n**Command:** %s" command))
-   (when parameters
-     (format "\n**Parameters:**\n%s" parameters))
-   "\n\n"
-   "```"
-   "\n"
-   (string-trim
-    (string-trim (string-trim output) "^```" "```$"))
-   "\n"
-   "```"
-   "\n"))
+  (let* ((trimmed (string-trim output))
+         (fence (make-string (max 3 (1+ (agent-shell--longest-backtick-run trimmed))) ?`)))
+    (concat
+     (format "\n\n### Tool Call [%s]: %s\n"
+             (or status "no status") (or title ""))
+     (when kind
+       (format "\n**Tool:** %s" kind))
+     (format "\n**Timestamp:** %s" (format-time-string "%F %T"))
+     (when description
+       (format "\n**Description:** %s" description))
+     (when command
+       (format "\n**Command:** %s" command))
+     (when parameters
+       (format "\n**Parameters:**\n%s" parameters))
+     "\n\n"
+     fence
+     "\n"
+     trimmed
+     "\n"
+     fence
+     "\n")))
 
 (defun agent-shell-open-transcript ()
   "Open the transcript file for the current `agent-shell' buffer."
