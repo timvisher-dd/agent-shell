@@ -58,13 +58,12 @@ an alist with a `content' string, or a vector of text items."
      ;; Vector shape: (toolResponse . [((type . "text") (text . "text..."))])
      ((vectorp response)
       (let* ((items (append response nil))
-             (parts (delq nil
-                          (mapcar (lambda (item)
-                                    (let ((text (agent-shell--meta-lookup item 'text)))
-                                      (when (and (stringp text)
-                                                 (not (string-empty-p text)))
-                                        text)))
-                                  items))))
+             (parts (mapcan (lambda (item)
+                              (let ((text (agent-shell--meta-lookup item 'text)))
+                                (when (and (stringp text)
+                                           (not (string-empty-p text)))
+                                  (list text))))
+                            items)))
         (when parts
           (mapconcat #'identity parts "\n\n")))))))
 
