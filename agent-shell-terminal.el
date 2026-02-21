@@ -91,14 +91,9 @@
 
 (defun agent-shell--terminal-command-list (command args)
   "Return command list for terminal/create from COMMAND and ARGS."
-  (cond
-   ((and (stringp command)
-         (or args (file-executable-p command)))
-    (cons command args))
-   ((stringp command)
-    (list shell-file-name (or shell-command-switch "-c") command))
-   (t
-    (cons command args))))
+  (if (or args (file-executable-p command))
+      (cons command args)
+    (list shell-file-name (or shell-command-switch "-c") command)))
 
 (defun agent-shell--terminal-make-output-buffer (terminal-id)
   "Create an output buffer for TERMINAL-ID."
