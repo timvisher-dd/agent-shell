@@ -176,28 +176,23 @@ truncated if any bytes were present."
     (if (not (buffer-live-p buffer))
         (cons "" nil)
       (with-current-buffer buffer
-        (let* ((min (point-min))
-               (max (point-max))
-               (output nil)
-               (truncated nil))
+        (let ((min (point-min))
+              (max (point-max)))
           (if (not (numberp limit))
-              (setq output (buffer-substring-no-properties min max))
+              (cons (buffer-substring-no-properties min max) nil)
             (let* ((min-bytes (position-bytes min))
                    (max-bytes (position-bytes max))
                    (bytes (- max-bytes min-bytes)))
               (cond
                ((<= limit 0)
-                (setq output ""
-                      truncated (< 0 bytes)))
+                (cons "" (< 0 bytes)))
                ((<= bytes limit)
-                (setq output (buffer-substring-no-properties min max)))
+                (cons (buffer-substring-no-properties min max) nil))
                (t
                 (let* ((excess (- bytes limit))
                        (cutoff-byte (+ min-bytes excess))
                        (cutoff-pos (or (byte-to-position cutoff-byte) min)))
-                  (setq output (buffer-substring-no-properties cutoff-pos max)
-                        truncated t))))))
-          (cons output truncated))))))
+                  (cons (buffer-substring-no-properties cutoff-pos max) t)))))))))))
 
 (defun agent-shell--terminal-signal-name (code)
   "Return a signal name for CODE or a numeric string fallback."
