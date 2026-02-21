@@ -215,6 +215,63 @@ DAY-OFFSET is applied to the local date before encoding."
     ;; Test empty string
     (should (equal (agent-shell--shorten-paths "") ""))))
 
+(ert-deftest agent-shell-cwd-resolver-default-test ()
+  "Test `agent-shell-cwd' without overrides."
+  (let ((temp-dir (make-temp-file "agent-shell-cwd-default-" t)))
+    (unwind-protect
+        (let ((agent-shell-cwd-resolver nil)
+              (default-directory (file-name-as-directory temp-dir)))
+          (let ((projectile-mode nil))
+            (cl-letf (((symbol-function 'project-current) (lambda () nil)))
+              (should (equal (agent-shell-cwd)
+                             (file-name-as-directory temp-dir))))))
+      (delete-directory temp-dir))))
+
+(ert-deftest agent-shell-cwd-resolver-variable-override-test ()
+  "Test `agent-shell-cwd' with a variable symbol override."
+  (let ((temp-dir (make-temp-file "agent-shell-cwd-variable-" t)))
+    (unwind-protect
+        (let ((agent-shell-cwd-resolver 'default-directory)
+              (default-directory (file-name-as-directory temp-dir)))
+          (let ((projectile-mode nil))
+            (cl-letf (((symbol-function 'project-current)
+                       (lambda () (error "project-current should not be called")))
+                      ((symbol-function 'project-root)
+                       (lambda (_) (error "project-root should not be called"))))
+              (should (equal (agent-shell-cwd)
+                             (file-name-as-directory temp-dir))))))
+      (delete-directory temp-dir))))
+
+(ert-deftest agent-shell-cwd-resolver-function-override-test ()
+  "Test `agent-shell-cwd' with a function override."
+  (let ((temp-dir (make-temp-file "agent-shell-cwd-function-" t)))
+    (unwind-protect
+        (let ((agent-shell-cwd-resolver (lambda ()
+                                          (file-name-as-directory temp-dir)))
+              (default-directory "/tmp/agent-shell-default/"))
+          (let ((projectile-mode nil))
+            (cl-letf (((symbol-function 'project-current)
+                       (lambda () (error "project-current should not be called")))
+                      ((symbol-function 'project-root)
+                       (lambda (_) (error "project-root should not be called"))))
+              (should (equal (agent-shell-cwd)
+                             (file-name-as-directory temp-dir))))))
+      (delete-directory temp-dir))))
+
+(ert-deftest agent-shell-cwd-resolver-invalid-override-test ()
+  "Test `agent-shell-cwd' with an invalid override."
+  (let ((agent-shell-cwd-resolver (make-symbol "agent-shell-cwd-unbound"))
+        (default-directory "/tmp/agent-shell-default/"))
+    (let ((projectile-mode nil))
+      (should-error (agent-shell-cwd) :type 'error))))
+
+(ert-deftest agent-shell-cwd-resolver-nil-override-test ()
+  "Test `agent-shell-cwd' when override returns nil."
+  (let ((agent-shell-cwd-resolver (lambda () nil))
+        (default-directory "/tmp/agent-shell-default/"))
+    (let ((projectile-mode nil))
+      (should-error (agent-shell-cwd) :type 'error))))
+
 (ert-deftest agent-shell--format-plan-test ()
   "Test `agent-shell--format-plan' function."
   (dolist (test-case `(;; Graphical display mode
@@ -1343,7 +1400,7 @@ code block content with spaces
   (should (null (agent-shell--extract-tool-parameters
                  '((plan . "Step 1: do something"))))))
 
-(ert-deftest agent-shell--make-transcript-tool-call-entry-test ()
+(ert-deftest agent-shell--make-transcript-tool-call-entry-parameters-test ()
   "Test `agent-shell--make-transcript-tool-call-entry' with parameters."
   ;; Test basic entry without parameters
   (let ((entry (agent-shell--make-transcript-tool-call-entry

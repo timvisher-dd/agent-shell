@@ -31,6 +31,26 @@
 
 (defvar projectile-mode)
 
+(defcustom agent-shell-cwd-resolver nil
+  "Optional resolver override for `agent-shell-cwd'.
+
+When nil, `agent-shell-cwd' uses the project root (Projectile or
+project.el) and falls back to `default-directory'.
+
+When non-nil, the value must be either a function called with no
+arguments or a symbol naming a variable whose value is a directory.
+
+Examples:
+- Use the current buffer directory via a variable symbol:
+  (setq agent-shell-cwd-resolver \='default-directory)
+  ;; Returns something like \"/tmp/project/\"
+- Use a custom function:
+  (setq agent-shell-cwd-resolver (lambda () \"~/work/\"))"
+  :type '(choice (const :tag "Default" nil)
+                 (function :tag "Function (no args)")
+                 (symbol :tag "Variable symbol"))
+  :group 'agent-shell)
+
 (declare-function projectile-project-p "projectile")
 (declare-function projectile-project-root "projectile")
 (declare-function projectile-project-name "projectile")
@@ -57,17 +77,34 @@
 (defun agent-shell-cwd ()
   "Return the CWD for this shell.
 
-If in a project, use project root."
-  (expand-file-name
-   (or (when (and (boundp 'projectile-mode)
-                  projectile-mode
-                  (fboundp 'projectile-project-root))
-         (projectile-project-root))
-       (when (fboundp 'project-root)
-         (when-let ((proj (project-current)))
-           (project-root proj)))
-       default-directory
-       (error "No CWD available"))))
+If `agent-shell-cwd-resolver' is nil, use the project root when
+available, falling back to `default-directory'.
+
+When `agent-shell-cwd-resolver' is non-nil, use that override.
+
+Examples:
+- With no project and `default-directory' set to \"/tmp/notes/\", return
+  \"/tmp/notes/\".
+- With `agent-shell-cwd-resolver' set to (lambda () \"/tmp/override/\"),
+  return \"/tmp/override/\"."
+  (let ((cwd (if agent-shell-cwd-resolver
+                 (cond
+                  ((functionp agent-shell-cwd-resolver)
+                   (funcall agent-shell-cwd-resolver))
+                  ((symbolp agent-shell-cwd-resolver)
+                   (symbol-value agent-shell-cwd-resolver)))
+               (or (when (and (boundp 'projectile-mode)
+                              projectile-mode
+                              (fboundp 'projectile-project-root))
+                     (projectile-project-root))
+                   (when (fboundp 'project-root)
+                     (when-let ((proj (project-current)))
+                       (project-root proj)))
+                   default-directory
+                   (error "No CWD available")))))
+    (unless (file-accessible-directory-p cwd)
+      (error "CWD is not an accessible directory: %S" cwd))
+    (expand-file-name cwd)))
 
 (defun agent-shell--project-name ()
   "Return the project name for this shell.
