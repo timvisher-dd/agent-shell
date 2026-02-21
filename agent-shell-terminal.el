@@ -248,6 +248,13 @@ Refresh cleanup timer when released.  Use TERMINAL when already looked up."
     (when (map-elt terminal :released)
       (agent-shell--terminal-schedule-cleanup state terminal-id))))
 
+
+(defun agent-shell--terminal-maybe-finalize (state terminal-id proc)
+  "Finalize TERMINAL-ID in STATE if PROC has exited."
+  (when (memq (process-status proc) '(exit signal))
+    (when (agent-shell--terminal-get state terminal-id)
+      (agent-shell--terminal-finalize state terminal-id))))
+
 (defun agent-shell--terminal-schedule-cleanup (state terminal-id &optional terminal)
   "Schedule cleanup for TERMINAL-ID in STATE after inactivity.
 Use TERMINAL when already looked up."
@@ -315,16 +322,10 @@ Use TERMINAL when already looked up."
                           :noquery t
                           :filter (agent-shell--terminal-process-filter state terminal-id)
                           :sentinel (lambda (proc _event)
-                                      (let ((status (process-status proc)))
-                                        (when (memq status '(exit signal))
-                                          (when (agent-shell--terminal-get state terminal-id)
-                                            (agent-shell--terminal-finalize state terminal-id))))))))
+                                      (agent-shell--terminal-maybe-finalize state terminal-id proc)))))
               (setf (map-elt terminal :process) proc)
               (agent-shell--terminal-put state terminal-id terminal)
-              (let ((status (process-status proc)))
-                (when (memq status '(exit signal))
-                  (when (agent-shell--terminal-get state terminal-id)
-                    (agent-shell--terminal-finalize state terminal-id))))
+              (agent-shell--terminal-maybe-finalize state terminal-id proc)
               (acp-send-response
                :client (map-elt state :client)
                :response `((:request-id . ,.id)
