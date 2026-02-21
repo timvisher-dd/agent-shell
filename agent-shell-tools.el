@@ -173,10 +173,50 @@ INCLUDE-CONTENT and INCLUDE-DIFF control optional fields."
       (error
        (message "Error writing to transcript: %S" err)))))
 
-(cl-defun agent-shell--make-transcript-tool-call-entry (&key status title kind description command output)
+(defun agent-shell--extract-tool-parameters (raw-input)
+  "Extract and format tool parameters from RAW-INPUT.
+Returns a formatted string of key parameters, or nil if no relevant
+parameters found.  Excludes `command', `description', and `plan' as
+these are already shown separately in transcript entries.
+
+For example, given RAW-INPUT:
+
+  \\='((filePath . \"/home/user/project/file.el\")
+    (offset . 10)
+    (limit . 20)
+    (command . \"grep -r foo\")
+    (description . \"Search for foo\"))
+
+returns:
+
+  \"filePath: /home/user/project/file.el
+  offset: 10
+  limit: 20\""
+  (when-let* ((raw-input)
+              (excluded-keys '(command description plan))
+              (params (seq-remove
+                       (lambda (pair)
+                         (let ((key (car pair))
+                               (value (cdr pair)))
+                           (or (memq key excluded-keys)
+                               (null value)
+                               (and (stringp value) (string-empty-p value)))))
+                       raw-input)))
+    (mapconcat (lambda (pair)
+                 (format "%s: %s"
+                         (symbol-name (car pair))
+                         (cond
+                          ((stringp (cdr pair)) (cdr pair))
+                          ((numberp (cdr pair)) (number-to-string (cdr pair)))
+                          ((eq (cdr pair) t) "true")
+                          (t (prin1-to-string (cdr pair))))))
+               params
+               "\n")))
+
+(cl-defun agent-shell--make-transcript-tool-call-entry (&key status title kind description command parameters output)
   "Create a formatted transcript entry for a tool call.
 
-Includes STATUS, TITLE, KIND, DESCRIPTION, COMMAND, and OUTPUT."
+Includes STATUS, TITLE, KIND, DESCRIPTION, COMMAND, PARAMETERS, and OUTPUT."
   (concat
    (format "
 
@@ -194,6 +234,10 @@ Includes STATUS, TITLE, KIND, DESCRIPTION, COMMAND, and OUTPUT."
    (when command
      (format "
 **Command:** %s" command))
+   (when parameters
+     (format "
+**Parameters:**
+%s" parameters))
    "
 
 "
@@ -265,6 +309,8 @@ OUTPUT-TEXT overrides content-derived output."
                   :kind (map-nested-elt state `(:tool-calls ,.toolCallId :kind))
                   :description (map-nested-elt state `(:tool-calls ,.toolCallId :description))
                   :command (map-nested-elt state `(:tool-calls ,.toolCallId :command))
+                  :parameters (agent-shell--extract-tool-parameters
+                               (map-nested-elt state `(:tool-calls ,.toolCallId :raw-input)))
                   :output body-text)
            :file-path agent-shell--transcript-file))
         ;; Hide permission after sending response.

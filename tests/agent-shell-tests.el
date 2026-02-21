@@ -23,7 +23,8 @@
 (defun agent-shell-test--iso-for-local-time (tz day-offset hour minute)
   "Return a UTC ISO timestamp for local time in TZ.
 
-DAY-OFFSET is applied to the local date before encoding."
+DAY-OFFSET is applied to the local date before encoding.
+HOUR and MINUTE specify the local time."
   (let* ((now (current-time))
          (decoded (decode-time now tz))
          (day (+ (decoded-time-day decoded) day-offset))
@@ -664,6 +665,17 @@ Found 6 files
 /path/to/file2.md
 ```
 ")))
+
+    ;; Test with parameters section
+    (let ((entry (agent-shell--make-transcript-tool-call-entry
+                  :status "completed"
+                  :title "Read file"
+                  :kind "read"
+                  :parameters "filePath: /home/user/test.txt\noffset: 100"
+                  :output "file content here")))
+      (should (string-match-p "\\*\\*Parameters:\\*\\*" entry))
+      (should (string-match-p "filePath: /home/user/test.txt" entry))
+      (should (string-match-p "offset: 100" entry)))
 
     ;; Test with minimal parameters
     (let ((entry (agent-shell--make-transcript-tool-call-entry
@@ -1342,30 +1354,6 @@ code block content with spaces
   ;; Test plan is excluded (shown separately)
   (should (null (agent-shell--extract-tool-parameters
                  '((plan . "Step 1: do something"))))))
-
-(ert-deftest agent-shell--make-transcript-tool-call-entry-test ()
-  "Test `agent-shell--make-transcript-tool-call-entry' with parameters."
-  ;; Test basic entry without parameters
-  (let ((entry (agent-shell--make-transcript-tool-call-entry
-                :status "completed"
-                :title "Read file"
-                :kind "read"
-                :output "file content here")))
-    (should (string-match-p "### Tool Call \\[completed\\]: Read file" entry))
-    (should (string-match-p "\\*\\*Tool:\\*\\* read" entry))
-    (should (string-match-p "file content here" entry))
-    (should-not (string-match-p "\\*\\*Parameters:\\*\\*" entry)))
-
-  ;; Test entry with parameters
-  (let ((entry (agent-shell--make-transcript-tool-call-entry
-                :status "completed"
-                :title "Read file"
-                :kind "read"
-                :parameters "filePath: /home/user/test.txt\noffset: 100"
-                :output "file content here")))
-    (should (string-match-p "\\*\\*Parameters:\\*\\*" entry))
-    (should (string-match-p "filePath: /home/user/test.txt" entry))
-    (should (string-match-p "offset: 100" entry))))
 
 (ert-deftest agent-shell--initialize-request-omits-terminal-output-meta-test ()
   "Initialize request should not include terminal_output meta capability."
