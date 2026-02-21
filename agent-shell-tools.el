@@ -38,11 +38,12 @@
 
 (declare-function agent-shell--make-diff-info "agent-shell")
 (declare-function agent-shell--format-diff-as-text "agent-shell")
-(declare-function agent-shell--append-transcript "agent-shell")
+(declare-function agent-shell--ensure-transcript-file "agent-shell")
 (declare-function agent-shell--delete-fragment "agent-shell")
 (declare-function agent-shell--update-fragment "agent-shell")
 (declare-function agent-shell-make-tool-call-label "agent-shell")
 (declare-function agent-shell--terminal-unlink-tool-call-content "agent-shell-terminal")
+(declare-function agent-shell--tool-call-terminal-output-data "agent-shell-meta")
 
 (defvar agent-shell-tool-use-expand-by-default)
 (defvar agent-shell--transcript-file)
@@ -230,8 +231,7 @@ INCLUDE-CONTENT and INCLUDE-DIFF control optional fields."
        tool-calls))))
 
 (defun agent-shell--append-tool-call-output (state tool-call-id text)
-  "Append TEXT to tool call output body for TOOL-CALL-ID in STATE.
-Avoid formatting when streaming chunks."
+  "Append TEXT to TOOL-CALL-ID output body in STATE without formatting."
   (when (and text (not (string-empty-p text)))
     (with-current-buffer (map-elt state :buffer)
       (let* ((inhibit-read-only t)
@@ -239,7 +239,17 @@ Avoid formatting when streaming chunks."
              (was-at-end (eobp))
              (saved-point (copy-marker (point) t))
              (marker (agent-shell--tool-call-ensure-output-marker state tool-call-id))
-             (ui-state (agent-shell--tool-call-output-ui-state state tool-call-id)))
+             (ui-state (agent-shell--tool-call-output-ui-state state tool-call-id))
+             (store-output (lambda (state)
+                             (when state
+                               (let* ((qualified-id (map-elt state :qualified-id))
+                                      (key (and qualified-id (concat qualified-id "-body"))))
+                                 (when key
+                                   (unless agent-shell-ui--content-store
+                                     (setq agent-shell-ui--content-store (make-hash-table :test 'equal)))
+                                   (puthash key
+                                            (concat (or (gethash key agent-shell-ui--content-store) "") text)
+                                            agent-shell-ui--content-store)))))))
         (if (not marker)
             (progn
               (agent-shell--update-fragment
@@ -248,7 +258,9 @@ Avoid formatting when streaming chunks."
                :body text
                :append t
                :navigation 'always)
-              (agent-shell--tool-call-ensure-output-marker state tool-call-id))
+              (agent-shell--tool-call-ensure-output-marker state tool-call-id)
+              (setq ui-state (agent-shell--tool-call-output-ui-state state tool-call-id))
+              (funcall store-output ui-state))
           (goto-char marker)
           (let ((start (point)))
             (insert text)
@@ -261,6 +273,7 @@ Avoid formatting when streaming chunks."
                 'read-only t
                 'front-sticky '(read-only)
                 'agent-shell-ui-state ui-state))
+              (funcall store-output ui-state)
               (when collapsed
                 (add-text-properties start end '(invisible t))))))
         (if was-at-end
@@ -268,13 +281,15 @@ Avoid formatting when streaming chunks."
           (goto-char saved-point))
         (set-marker saved-point nil)))))
 
+
 (defun agent-shell--handle-tool-call-update-streaming (state update)
   "Stream tool call UPDATE in STATE with minimal formatting."
   (let* ((tool-call-id (map-elt update 'toolCallId))
          (status (map-elt update 'status))
          (terminal-data (agent-shell--tool-call-terminal-output-data update))
          (meta-response (agent-shell--tool-call-meta-response-text update))
-         (final (member status '("completed" "failed" "cancelled"))))
+         (final (member status '("completed" "failed" "cancelled")))
+         (has-terminal (map-nested-elt state `(:tool-calls ,tool-call-id :has-terminal))))
     (agent-shell--save-tool-call
      state
      tool-call-id
@@ -291,7 +306,8 @@ Avoid formatting when streaming chunks."
          state
          update
          (agent-shell--tool-call-output-text state tool-call-id))
-        (agent-shell--tool-call-clear-output state tool-call-id)))
+        (unless has-terminal
+          (agent-shell--tool-call-clear-output state tool-call-id))))
      ;; Non-final meta toolResponse: output in _meta.*.toolResponse
      ((and meta-response (not final))
       (let ((chunk (agent-shell--tool-call-normalize-output meta-response)))
@@ -302,99 +318,134 @@ Avoid formatting when streaming chunks."
       (agent-shell--handle-tool-call-update
        state
        update
-       (or (agent-shell--tool-call-output-text state tool-call-id)
-           (agent-shell--tool-call-content-text (map-elt update 'content))))
-      (agent-shell--tool-call-clear-output state tool-call-id)))))
+       (unless has-terminal
+         (or (agent-shell--tool-call-output-text state tool-call-id)
+             (agent-shell--tool-call-content-text (map-elt update 'content)))))
+      (unless has-terminal
+        (agent-shell--tool-call-clear-output state tool-call-id))))))
 
-(defun agent-shell--handle-tool-call-update (state update &optional output-text)
-  "Handle tool call UPDATE in STATE immediately.
-OUTPUT-TEXT overrides content-derived output."
-  (let-alist update
-    ;; Update stored tool call data with new status and content
-    (agent-shell--save-tool-call
-     state
-     .toolCallId
-     (agent-shell--tool-call-update-overrides state update t t))
-    (let* ((diff (map-nested-elt state `(:tool-calls ,.toolCallId :diff)))
-           (content-text (or output-text
-                             (agent-shell--tool-call-content-text .content)
-                             ""))
-           (output (if (string-empty-p content-text)
-                       ""
-                     (concat "
 
-" content-text "
-
-")))
-           (diff-text (agent-shell--format-diff-as-text diff))
-           (body-text (if diff-text
-                          (concat output
-                                  "
-
-"
-                                  "╭─────────╮
-"
-                                  "│ changes │
-"
-                                  "╰─────────╯
-
-" diff-text)
-                        output)))
-      ;; Log tool call to transcript when completed or failed
-      (when (and (map-elt update 'status)
-                 (member (map-elt update 'status)
-                         '("completed" "failed" "cancelled")))
-        (agent-shell--append-transcript
-         :text (agent-shell--make-transcript-tool-call-entry
-                :status (map-elt update 'status)
-                :title (map-nested-elt state `(:tool-calls ,.toolCallId :title))
-                :kind (map-nested-elt state `(:tool-calls ,.toolCallId :kind))
-                :description (map-nested-elt state `(:tool-calls ,.toolCallId :description))
-                :command (map-nested-elt state `(:tool-calls ,.toolCallId :command))
-                :output body-text)
-         :file-path agent-shell--transcript-file))
-      ;; Hide permission after sending response.
-      ;; Status and permission are no longer pending. User
-      ;; likely selected one of: accepted/rejected/always.
-      ;; Remove stale permission dialog.
-      (when (and (map-elt update 'status)
-                 (not (equal (map-elt update 'status) "pending")))
-        ;; block-id must be the same as the one used as
-        ;; agent-shell--update-fragment param by "session/request_permission".
-        (agent-shell--delete-fragment :state state :block-id (format "permission-%s" .toolCallId)))
-      (let ((tool-call-labels (agent-shell-make-tool-call-label
-                               state .toolCallId)))
-        (agent-shell--update-fragment
-         :state state
-         :block-id .toolCallId
-         :label-left (map-elt tool-call-labels :status)
-         :label-right (map-elt tool-call-labels :title)
-         :body (string-trim body-text)
-         :navigation 'always
-         :expanded agent-shell-tool-use-expand-by-default)))))
+(cl-defun agent-shell--append-transcript (&key text file-path)
+  "Append TEXT to the transcript at FILE-PATH."
+  (when (and file-path (agent-shell--ensure-transcript-file))
+    (condition-case err
+        (write-region text nil file-path t 'no-message)
+      (error
+       (message "Error writing to transcript: %S" err)))))
 
 (cl-defun agent-shell--make-transcript-tool-call-entry (&key status title kind description command output)
   "Create a formatted transcript entry for a tool call.
 
 Includes STATUS, TITLE, KIND, DESCRIPTION, COMMAND, and OUTPUT."
   (concat
-   (format "\n\n### Tool Call [%s]: %s\n"
+   (format "
+
+### Tool Call [%s]: %s
+"
            (or status "no status") (or title ""))
    (when kind
-     (format "\n**Tool:** %s" kind))
-   (format "\n**Timestamp:** %s" (format-time-string "%F %T"))
+     (format "
+**Tool:** %s" kind))
+   (format "
+**Timestamp:** %s" (format-time-string "%F %T"))
    (when description
-     (format "\n**Description:** %s" description))
+     (format "
+**Description:** %s" description))
    (when command
-     (format "\n**Command:** %s" command))
-   "\n\n"
+     (format "
+**Command:** %s" command))
+   "
+
+"
    "```"
-   "\n"
+   "
+"
    (string-trim
     (string-trim (string-trim output) "^```" "```$"))
-   "\n"
+   "
+"
    "```"
-   "\n"))
+   "
+"))
+
+(defun agent-shell--handle-tool-call-update (state update &optional output-text)
+  "Handle tool call UPDATE in STATE immediately.
+OUTPUT-TEXT overrides content-derived output."
+  (let-alist update
+    (let* ((status (map-elt update 'status))
+           (has-terminal (map-nested-elt state `(:tool-calls ,.toolCallId :has-terminal)))
+           (terminal-content (or .content
+                                 (map-nested-elt state `(:tool-calls ,.toolCallId :content))))
+           (final (and status
+                       (member status '("completed" "failed" "cancelled")))))
+      ;; Update stored tool call data with new status and content
+      (agent-shell--save-tool-call
+       state
+       .toolCallId
+       (agent-shell--tool-call-update-overrides state update t t))
+      (let* ((diff (map-nested-elt state `(:tool-calls ,.toolCallId :diff)))
+             (content-text (cond
+                            (output-text output-text)
+                            (has-terminal "")
+                            (t (or (agent-shell--tool-call-content-text .content) ""))))
+             (output (if (string-empty-p content-text)
+                         ""
+                       (concat "
+
+" content-text "
+
+")))
+             (diff-text (agent-shell--format-diff-as-text diff))
+             (body-text (if diff-text
+                            (concat output
+                                    "
+
+"
+                                    "╭─────────╮
+"
+                                    "│ changes │
+"
+                                    "╰─────────╯
+
+"
+                                    diff-text)
+                          output))
+             (body (let ((trimmed (string-trim body-text)))
+                     (if (and has-terminal (string-empty-p trimmed))
+                         nil
+                       trimmed))))
+        ;; Log tool call to transcript when completed or failed
+        (when final
+          (agent-shell--terminal-unlink-tool-call-content
+           state .toolCallId terminal-content)
+          (agent-shell--append-transcript
+           :text (agent-shell--make-transcript-tool-call-entry
+                  :status status
+                  :title (map-nested-elt state `(:tool-calls ,.toolCallId :title))
+                  :kind (map-nested-elt state `(:tool-calls ,.toolCallId :kind))
+                  :description (map-nested-elt state `(:tool-calls ,.toolCallId :description))
+                  :command (map-nested-elt state `(:tool-calls ,.toolCallId :command))
+                  :output body-text)
+           :file-path agent-shell--transcript-file))
+        ;; Hide permission after sending response.
+        ;; Status and permission are no longer pending. User
+        ;; likely selected one of: accepted/rejected/always.
+        ;; Remove stale permission dialog.
+        (when (and status
+                   (not (equal status "pending")))
+          ;; block-id must be the same as the one used as
+          ;; agent-shell--update-fragment param by "session/request_permission".
+          (agent-shell--delete-fragment :state state :block-id (format "permission-%s" .toolCallId)))
+        (let ((tool-call-labels (agent-shell-make-tool-call-label
+                                 state .toolCallId)))
+          (agent-shell--update-fragment
+           :state state
+           :block-id .toolCallId
+           :label-left (map-elt tool-call-labels :status)
+           :label-right (map-elt tool-call-labels :title)
+           :body body
+           :navigation 'always
+           :expanded agent-shell-tool-use-expand-by-default))))))
 
 (provide 'agent-shell-tools)
 

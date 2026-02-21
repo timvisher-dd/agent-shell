@@ -39,6 +39,19 @@
     (if (and (null value) (symbolp key))
         (map-elt meta (symbol-name key))
       value)))
+(defun agent-shell--tool-call-terminal-output-data (update)
+  "Return terminal output data string from UPDATE meta, if present."
+  (let* ((meta (or (map-elt update '_meta)
+                   (map-elt update 'meta)))
+         (terminal (and meta
+                        (or (agent-shell--meta-lookup meta 'terminal_output)
+                            (agent-shell--meta-lookup meta 'terminal-output)))))
+    (when terminal
+      (let ((data (or (agent-shell--meta-lookup terminal 'data)
+                      (agent-shell--meta-lookup terminal "data"))))
+        (when (stringp data)
+          data)))))
+
 
 (defun agent-shell--tool-call-meta-response-text (update)
   "Return tool response text from UPDATE meta, if present.

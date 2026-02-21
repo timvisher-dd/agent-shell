@@ -80,8 +80,8 @@ Binds BUFFER, OUTPUT-BUFFER, TERMINAL-ID, and STATE, then cleans up."
     (with-current-buffer output-buffer
       (should (string-match-p "terminal chunk" (buffer-string))))))
 
-(ert-deftest agent-shell--terminal-output-does-not-accumulate-chunks-test ()
-  "Terminal output does not accumulate in output chunks."
+(ert-deftest agent-shell--terminal-output-accumulates-tool-call-chunks-test ()
+  "Terminal output accumulates in tool call output chunks."
   (agent-shell--with-terminal-test-fixture buffer output-buffer terminal-id agent-shell--state
     (with-current-buffer buffer
       (agent-shell--on-notification
@@ -106,8 +106,9 @@ Binds BUFFER, OUTPUT-BUFFER, TERMINAL-ID, and STATE, then cleans up."
       (let ((contents (buffer-string)))
         (should (string-match-p (regexp-quote "chunk-A") contents))
         (should (string-match-p (regexp-quote "chunk-B") contents))))
-    (should-not (agent-shell--tool-call-output-text agent-shell--state
-                                                    "call-no-chunks"))))
+    (should (equal (agent-shell--tool-call-output-text agent-shell--state
+                                                       "call-no-chunks")
+                   "chunk-Achunk-B"))))
 
 (ert-deftest agent-shell--terminal-output-prunes-final-tool-calls-test ()
   "Finalized tool calls no longer receive terminal output."
@@ -122,7 +123,7 @@ Binds BUFFER, OUTPUT-BUFFER, TERMINAL-ID, and STATE, then cleans up."
                                               (title . "Terminal")
                                               (kind . "tool")
                                               (content . [((type . "terminal")
-                                                           (terminalId . ,terminal-id))]))))))))
+                                                           (terminalId . ,terminal-id))])))))))
       (agent-shell--on-notification
        :state agent-shell--state
        :notification `((method . "session/update")
@@ -132,7 +133,7 @@ Binds BUFFER, OUTPUT-BUFFER, TERMINAL-ID, and STATE, then cleans up."
                                               (title . "Terminal")
                                               (kind . "tool")
                                               (content . [((type . "terminal")
-                                                           (terminalId . ,terminal-id))])))))))))
+                                                           (terminalId . ,terminal-id))]))))))))
     (agent-shell--terminal-handle-output
      agent-shell--state
      terminal-id
@@ -153,7 +154,6 @@ Binds BUFFER, OUTPUT-BUFFER, TERMINAL-ID, and STATE, then cleans up."
                    "chunk-1"))
     (should (equal (agent-shell--tool-call-output-text agent-shell--state "call-2")
                    "chunk-1chunk-2"))))
-
 
 (ert-deftest agent-shell--terminal-final-update-ignores-agent-content-test ()
   "Final tool_call_update ignores agent content for terminal tool calls."

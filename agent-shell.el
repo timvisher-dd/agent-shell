@@ -1349,6 +1349,76 @@ otherwise returns COMMAND unchanged."
             :navigation 'never)
            (map-put! state :last-entry-type nil)))))
 
+(cl-defun agent-shell--on-request (&key state request)
+  "Handle incoming request using SHELL, STATE, and REQUEST."
+  (let-alist request
+    (cond ((equal .method "session/request_permission")
+           (agent-shell--save-tool-call
+            state .params.toolCall.toolCallId
+            (append (list (cons :title .params.toolCall.title)
+                          (cons :status .params.toolCall.status)
+                          (cons :kind .params.toolCall.kind)
+                          (cons :permission-request-id .id))
+                    (when-let ((diff (agent-shell--make-diff-info
+                                      :tool-call .params.toolCall)))
+                      (list (cons :diff diff)))))
+           (agent-shell--update-fragment
+            :state state
+            ;; block-id must be the same as the one used
+            ;; in agent-shell--delete-fragment param.
+            :block-id (format "permission-%s" .params.toolCall.toolCallId)
+            :body (with-current-buffer (map-elt state :buffer)
+                    (agent-shell--make-tool-call-permission-text
+                     :request request
+                     :client (map-elt state :client)
+                     :state state))
+            :expanded t
+            :navigation 'never)
+           (agent-shell-jump-to-latest-permission-button-row)
+           (when-let (((map-elt state :buffer))
+                      (viewport-buffer (agent-shell-viewport--buffer
+                                        :shell-buffer (map-elt state :buffer)
+                                        :existing-only t)))
+             (with-current-buffer viewport-buffer
+               (agent-shell-jump-to-latest-permission-button-row)))
+           (map-put! state :last-entry-type "session/request_permission"))
+          ((equal .method "fs/read_text_file")
+           (agent-shell--on-fs-read-text-file-request
+            :state state
+            :request request))
+          ((equal .method "fs/write_text_file")
+           (agent-shell--on-fs-write-text-file-request
+            :state state
+            :request request))
+          ((equal .method "terminal/create")
+           (agent-shell--on-terminal-create-request
+            :state state
+            :request request))
+          ((equal .method "terminal/output")
+           (agent-shell--on-terminal-output-request
+            :state state
+            :request request))
+          ((equal .method "terminal/wait_for_exit")
+           (agent-shell--on-terminal-wait-for-exit-request
+            :state state
+            :request request))
+          ((equal .method "terminal/kill")
+           (agent-shell--on-terminal-kill-request
+            :state state
+            :request request))
+          ((equal .method "terminal/release")
+           (agent-shell--on-terminal-release-request
+            :state state
+            :request request))
+          (t
+           (agent-shell--update-fragment
+            :state state
+            :block-id "Unhandled Incoming Request"
+            :body (format "⚠ Unhandled incoming request: \"%s\"" .method)
+            :create-new t
+            :navigation 'never)
+           (map-put! state :last-entry-type nil)))))
+
 (cl-defun agent-shell--extract-buffer-text (&key buffer line limit)
   "Extract text from BUFFER starting from LINE with optional LIMIT.
 If the buffer's file has changed, prompt the user to reload it."
@@ -5458,13 +5528,6 @@ Returns the file path, or nil if disabled."
          (message "Failed to initialize transcript: %S" err))))
     filepath))
 
-(cl-defun agent-shell--append-transcript (&key text file-path)
-  "Append TEXT to the transcript at FILE-PATH."
-  (when (and file-path (agent-shell--ensure-transcript-file))
-    (condition-case err
-        (write-region text nil file-path t 'no-message)
-      (error
-       (message "Error writing to transcript: %S" err)))))
 (defun agent-shell-open-transcript ()
   "Open the transcript file for the current `agent-shell' buffer."
   (interactive)

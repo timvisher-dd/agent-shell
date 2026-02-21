@@ -43,7 +43,6 @@
 (declare-function agent-shell--emit-event "agent-shell")
 (declare-function agent-shell-make-tool-call-label "agent-shell")
 (declare-function agent-shell--update-fragment "agent-shell")
-(declare-function agent-shell--append-transcript "agent-shell")
 (declare-function agent-shell--update-text "agent-shell")
 (declare-function agent-shell--format-plan "agent-shell")
 (declare-function agent-shell--format-available-commands "agent-shell")
@@ -64,6 +63,7 @@
 (defvar agent-shell--transcript-file)
 
 (declare-function agent-shell--append-tool-call-output "agent-shell")
+(declare-function agent-shell--tool-call-append-output-chunk "agent-shell-tools")
 
 (defvar agent-shell--state)
 
@@ -144,6 +144,7 @@
 
 (defun agent-shell--terminal-stream-output (state tool-call-id output)
   "Stream terminal OUTPUT into tool call TOOL-CALL-ID in STATE."
+  (agent-shell--tool-call-append-output-chunk state tool-call-id output)
   (agent-shell--append-tool-call-output state tool-call-id output))
 
 (defun agent-shell--terminal-link-tool-call (state terminal-id tool-call-id)
@@ -361,20 +362,21 @@ Refresh cleanup timer when released."  (when-let ((entry (or terminal (agent-she
                  (proc (progn
                          (unless (file-directory-p default-directory)
                            (error "Terminal/create cwd not found: %s" default-directory))
-                         (make-process                          :name (format "agent-shell-terminal-%s" terminal-id)
+                         (make-process
+                          :name (format "agent-shell-terminal-%s" terminal-id)
                           :buffer output-buffer
                           :command command-list
                           :noquery t
                           :filter (agent-shell--terminal-process-filter state terminal-id)
                           :sentinel (lambda (proc _event)
-                                      (agent-shell--terminal-maybe-finalize state terminal-id proc)))))
-              (setf (map-elt terminal :process) proc)
-              (agent-shell--terminal-put state terminal-id terminal)
-              (agent-shell--terminal-maybe-finalize state terminal-id proc)
-              (acp-send-response
-               :client (map-elt state :client)
-               :response `((:request-id . ,.id)
-                           (:result . ((terminalId . ,terminal-id))))))))
+                                      (agent-shell--terminal-maybe-finalize state terminal-id proc))))))
+            (setf (map-elt terminal :process) proc)
+            (agent-shell--terminal-put state terminal-id terminal)
+            (agent-shell--terminal-maybe-finalize state terminal-id proc)
+            (acp-send-response
+             :client (map-elt state :client)
+             :response `((:request-id . ,.id)
+                         (:result . ((terminalId . ,terminal-id)))))))
       (quit
        (acp-send-response
         :client (map-elt state :client)
