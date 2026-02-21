@@ -1157,7 +1157,13 @@ COMMAND, when present, may be a shell command string or an argv vector."
                  ;;          (equal (map-elt state :last-entry-type) "agent_thought_chunk"))
                  (unless (equal (map-elt state :last-entry-type)
                                 "agent_thought_chunk")
-                   (map-put! state :chunked-group-count (1+ (map-elt state :chunked-group-count))))
+                   (map-put! state :chunked-group-count (1+ (map-elt state :chunked-group-count)))
+                   (agent-shell--append-transcript
+                    :text (format "## Agent's Thoughts (%s)\n\n" (format-time-string "%F %T"))
+                    :file-path agent-shell--transcript-file))
+                 (agent-shell--append-transcript
+                  :text .content.text
+                  :file-path agent-shell--transcript-file)
                  (agent-shell--update-fragment
                   :state state
                   :block-id (format "%s-agent_thought_chunk"
@@ -1175,7 +1181,7 @@ COMMAND, when present, may be a shell command string or an argv vector."
                (unless (equal (map-elt state :last-entry-type) "agent_message_chunk")
                  (map-put! state :chunked-group-count (1+ (map-elt state :chunked-group-count)))
                  (agent-shell--append-transcript
-                  :text (format "## Agent (%s)\n\n" (format-time-string "%F %T"))
+                  :text (format "\n## Agent (%s)\n\n" (format-time-string "%F %T"))
                   :file-path agent-shell--transcript-file))
                (let-alist update
                  (agent-shell--append-transcript
