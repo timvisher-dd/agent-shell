@@ -305,11 +305,10 @@ Use TERMINAL when already looked up."
                              (:waiters . nil)
                              (:released . nil)
                              (:cleanup-timer . nil)
-                             (:last-access . ,(float-time))))
-                 (proc (progn
-                         (unless (file-directory-p default-directory)
-                           (error "Terminal/create cwd not found: %s" default-directory))
-                         (make-process
+                             (:last-access . ,(float-time)))))
+            (unless (file-directory-p default-directory)
+              (error "Terminal/create cwd not found: %s" default-directory))
+            (let* ((proc (make-process
                           :name (format "agent-shell-terminal-%s" terminal-id)
                           :buffer output-buffer
                           :command command-list
@@ -319,17 +318,17 @@ Use TERMINAL when already looked up."
                                       (let ((status (process-status proc)))
                                         (when (memq status '(exit signal))
                                           (when (agent-shell--terminal-get state terminal-id)
-                                            (agent-shell--terminal-finalize state terminal-id)))))))))
-            (setf (map-elt terminal :process) proc)
-            (agent-shell--terminal-put state terminal-id terminal)
-            (let ((status (process-status proc)))
-              (when (memq status '(exit signal))
-                (when (agent-shell--terminal-get state terminal-id)
-                  (agent-shell--terminal-finalize state terminal-id))))
-            (acp-send-response
-             :client (map-elt state :client)
-             :response `((:request-id . ,.id)
-                         (:result . ((terminalId . ,terminal-id)))))))
+                                            (agent-shell--terminal-finalize state terminal-id))))))))
+              (setf (map-elt terminal :process) proc)
+              (agent-shell--terminal-put state terminal-id terminal)
+              (let ((status (process-status proc)))
+                (when (memq status '(exit signal))
+                  (when (agent-shell--terminal-get state terminal-id)
+                    (agent-shell--terminal-finalize state terminal-id))))
+              (acp-send-response
+               :client (map-elt state :client)
+               :response `((:request-id . ,.id)
+                           (:result . ((terminalId . ,terminal-id))))))))
       (quit
        (acp-send-response
         :client (map-elt state :client)
