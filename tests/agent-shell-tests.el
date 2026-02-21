@@ -151,8 +151,8 @@
 
 (ert-deftest agent-shell--shorten-paths-test ()
   "Test `agent-shell--shorten-paths' function."
-  ;; Mock agent-shell-cwd to return a predictable value
-  (cl-letf (((symbol-function 'agent-shell-cwd)
+  ;; Mock agent-shell-project-root to return a predictable value
+  (cl-letf (((symbol-function 'agent-shell-project-root)
              (lambda () "/path/to/agent-shell/")))
 
     ;; Test shortening full paths to project-relative format
@@ -300,8 +300,8 @@
           (with-temp-file temp-file
             (insert file-content))
 
-          ;; Mock agent-shell-cwd
-          (cl-letf (((symbol-function 'agent-shell-cwd)
+          ;; Mock agent-shell-project-root
+          (cl-letf (((symbol-function 'agent-shell-project-root)
                      (lambda () default-directory)))
 
             ;; Test with embedded context support and small file
@@ -379,8 +379,8 @@
             (set-buffer-multibyte nil)
             (insert png-data))
 
-          ;; Mock agent-shell-cwd
-          (cl-letf (((symbol-function 'agent-shell-cwd)
+          ;; Mock agent-shell-project-root
+          (cl-letf (((symbol-function 'agent-shell-project-root)
                      (lambda () default-directory))
                     ((symbol-function 'agent-shell--image-type-to-mime)
                      (lambda (_filename) "image/png")))
@@ -1060,7 +1060,7 @@ code block content
                  (lambda (&rest _args) nil))
                 ((symbol-function 'agent-shell--update-header-and-mode-line)
                  (lambda () nil))
-                ((symbol-function 'agent-shell-cwd)
+                ((symbol-function 'agent-shell-project-root)
                  (lambda () "/tmp"))
                 ((symbol-function 'agent-shell--resolve-path)
                  (lambda (path) path))
@@ -1124,7 +1124,7 @@ code block content
                  (lambda (&rest _args) nil))
                 ((symbol-function 'agent-shell--update-header-and-mode-line)
                  (lambda () nil))
-                ((symbol-function 'agent-shell-cwd)
+                ((symbol-function 'agent-shell-project-root)
                  (lambda () "/tmp"))
                 ((symbol-function 'agent-shell--resolve-path)
                  (lambda (path) path))
@@ -1224,7 +1224,7 @@ code block content
                  (lambda (&rest _args) nil))
                 ((symbol-function 'agent-shell--update-header-and-mode-line)
                  (lambda () nil))
-                ((symbol-function 'agent-shell-cwd)
+                ((symbol-function 'agent-shell-project-root)
                  (lambda () "/tmp"))
                 ((symbol-function 'agent-shell--resolve-path)
                  (lambda (path) path))

@@ -223,6 +223,21 @@ You can load environment variables from .env files using the `:load-env` paramet
 
 The .env files should contain variables in the format `KEY=value`, with one variable per line. Comments (lines starting with `#`) and empty lines are ignored.
 
+*** Project root
+
+By default, agent-shell uses the current project root (Projectile or project.el)
+and falls back to `default-directory`. See `agent-shell-project-root` for
+details on how this root is used. To override that behavior, customize
+`agent-shell-project-root-function` with a function that returns a directory.
+
+#+begin_src emacs-lisp
+;; Use the current buffer directory.
+(setq agent-shell-project-root-function (lambda () default-directory))
+
+;; Use a fixed directory.
+(setq agent-shell-project-root-function (lambda () (expand-file-name "~/work/")))
+#+end_src
+
 *** Anthropic Claude
 
 For login-based authentication (default):

@@ -31,6 +31,23 @@
 
 (defvar projectile-mode)
 
+(defcustom agent-shell-project-root-function nil
+  "Optional function override for `agent-shell-project-root'.
+
+See `agent-shell-project-root' for details on how the root is used.
+
+When non-nil, the value must be a function called with no arguments
+that returns a directory satisfying `file-accessible-directory-p'.
+
+Examples:
+- Use the current buffer directory via a function:
+  (setq agent-shell-project-root-function (lambda () default-directory))
+- Use a custom function:
+  (setq agent-shell-project-root-function (lambda () \"~/work/\"))"
+  :type '(choice (const :tag "Default" nil)
+                 (function :tag "Function (no args)"))
+  :group 'agent-shell)
+
 (declare-function projectile-project-p "projectile")
 (declare-function projectile-project-root "projectile")
 (declare-function projectile-project-name "projectile")
@@ -54,20 +71,35 @@
               (project-files proj))))
    (t nil)))
 
-(defun agent-shell-cwd ()
-  "Return the CWD for this shell.
+(defun agent-shell-project-root ()
+  "Return the project root for this shell.
 
-If in a project, use project root."
-  (expand-file-name
-   (or (when (and (boundp 'projectile-mode)
-                  projectile-mode
-                  (fboundp 'projectile-project-root))
-         (projectile-project-root))
-       (when (fboundp 'project-root)
-         (when-let ((proj (project-current)))
-           (project-root proj)))
-       default-directory
-       (error "No CWD available"))))
+This root anchors project-scoped behavior:
+
+- Shell grouping: used to find or prompt for a shell when the current
+  buffer's project changes.
+- Path shortening and file mentions: file paths are shortened relative
+  to this root, and file mentions expand against it.
+- Project artifacts: screenshots and transcripts are stored under the
+  `.agent-shell/' directory in this root.
+
+If `agent-shell-project-root-function' is nil, use the project root when
+available, falling back to `default-directory'.  When
+`agent-shell-project-root-function' is non-nil, use that override."
+  (let ((project-root (if agent-shell-project-root-function
+                          (funcall agent-shell-project-root-function)
+               (or (when (and (boundp 'projectile-mode)
+                              projectile-mode
+                              (fboundp 'projectile-project-root))
+                     (projectile-project-root))
+                   (when (fboundp 'project-root)
+                     (when-let ((proj (project-current)))
+                       (project-root proj)))
+                   default-directory
+                   (error "No project root available")))))
+    (unless (file-accessible-directory-p project-root)
+      (error "Project root is not an accessible directory: %S" project-root))
+    (expand-file-name project-root)))
 
 (defun agent-shell--project-name ()
   "Return the project name for this shell.

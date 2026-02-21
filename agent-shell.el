@@ -532,8 +532,8 @@ Example configuration with multiple servers:
 
 Lambdas can be used anywhere in the configuration hierarchy for dynamic
 evaluation at session startup time.  This is useful for values that
-depend on runtime context like the current working directory
-\(`agent-shell-cwd').  Note: only lambdas are evaluated, not named
+depend on runtime context like the current project root
+\(`agent-shell-project-root').  Note: only lambdas are evaluated, not named
 functions, to avoid accidentally calling external symbols.
 
 For example, using the `claude-code-ide' package (see its documentation
@@ -546,7 +546,7 @@ the session and returns the appropriate endpoint:
            (headers . ())
            (url . (lambda ()
                     (require \='claude-code-ide-mcp-server)
-                    (let* ((project-dir (agent-shell-cwd))
+                    (let* ((project-dir (agent-shell-project-root))
                            (session-id (format \"agent-shell-%s-%s\"
                                          (file-name-nondirectory
                                            (directory-file-name project-dir))
@@ -886,10 +886,10 @@ When FORCE is non-nil, skip confirmation prompt."
       :shell-buffer (map-elt shell :buffer)))))
 
 (defun agent-shell--filter-buffer-substring (start end &optional delete)
-  "Return the buffer substring between BEG and END, after filtering.
+  "Return the buffer substring between START and END, after filtering.
 Strip the text properties `line-prefix' and `wrap-prefix' from the
-copied substring.  If DELETE is non-nil, delete the text between BEG and
-END from the buffer."
+copied substring.  If DELETE is non-nil, delete the text between START
+and END from the buffer."
   (let ((text (if delete
                   (prog1 (buffer-substring start end)
                     (delete-region start end))
@@ -1620,7 +1620,7 @@ For example:
 
 - /workspace/README.md => /home/xenodium/projects/kitchen-sink/README.md
 - /home/xenodium/projects/kitchen-sink/README.md => /workspace/README.md"
-  (let* ((cwd (agent-shell-cwd))
+  (let* ((cwd (agent-shell-project-root))
          (devcontainer-path (agent-shell--get-devcontainer-workspace-path cwd)))
     (if (string-prefix-p cwd path)
         (string-replace cwd devcontainer-path path)
@@ -1984,7 +1984,7 @@ DESTINATION-DIR is required and must be provided."
 Returns the full path to the saved image file on success.
 When NO-ERROR is non-nil, return nil instead of signaling errors.
 
-Needs external utilities. See `agent-shell-clipboard-image-handlers'
+Needs external utilities.  See `agent-shell-clipboard-image-handlers'
 for details."
   (unless destination-dir
     (error "Destination-dir is required"))
@@ -2052,7 +2052,6 @@ Returns a propertized string or nil."
 (defcustom agent-shell-status-kind-label-function
   #'agent-shell--default-status-kind-label
   "Function to render status and kind labels.
-
 Called with two arguments: STATUS (string or nil) and KIND (string or nil).
 Should return a propertized string or nil.
 
@@ -2077,7 +2076,7 @@ With INCLUDE-PROJECT
 
 \"/path/to/project/file.txt\" -> \"project/file.txt\""
   (when text
-    (let ((cwd (string-remove-suffix "/" (agent-shell-cwd))))
+    (let ((cwd (string-remove-suffix "/" (agent-shell-project-root))))
       (replace-regexp-in-string (concat (regexp-quote
                                          (if include-project
                                              (string-remove-suffix
@@ -2223,7 +2222,7 @@ variable (see makunbound)"))
                               :prompt (map-elt config :shell-prompt)
                               :prompt-regexp (map-elt config :shell-prompt-regexp)))
          (agent-shell--shell-maker-config shell-maker-config)
-         (default-directory (agent-shell-cwd))
+         (default-directory (agent-shell-project-root))
          (shell-buffer
           (shell-maker-start agent-shell--shell-maker-config
                              t  ;; Always use no-focus, handle display below
@@ -3536,7 +3535,7 @@ Falls back to latest session in batch mode (e.g. tests)."
   (acp-send-request
    :client (map-elt (agent-shell--state) :client)
    :request (acp-make-session-new-request
-             :cwd (agent-shell--resolve-path (agent-shell-cwd))
+             :cwd (agent-shell--resolve-path (agent-shell-project-root))
              :mcp-servers (agent-shell--mcp-servers))
    :buffer (current-buffer)
    :on-success (lambda (response)
@@ -3599,7 +3598,7 @@ Falls back to latest session in batch mode (e.g. tests)."
   (acp-send-request
    :client (map-elt (agent-shell--state) :client)
    :request (acp-make-session-list-request
-             :cwd (agent-shell--resolve-path (agent-shell-cwd)))
+             :cwd (agent-shell--resolve-path (agent-shell-project-root)))
    :buffer (current-buffer)
    :on-success (lambda (acp-response)
                  (let ((acp-sessions (append (or (map-elt acp-response 'sessions) '()) nil)))
@@ -3628,7 +3627,7 @@ Falls back to latest session in batch mode (e.g. tests)."
                                 :append t)
                                (acp-send-request
                                 :client (map-elt (agent-shell--state) :client)
-                                :request (let ((cwd (agent-shell--resolve-path (agent-shell-cwd)))
+                                :request (let ((cwd (agent-shell--resolve-path (agent-shell-project-root)))
                                                (mcp-servers (agent-shell--mcp-servers)))
                                            (let ((use-resume (if agent-shell-prefer-session-resume
                                                                   (map-elt (agent-shell--state) :supports-session-resume)
@@ -3766,7 +3765,7 @@ Returns list of alists with :start, :end, and :path for each mention."
       (let* ((start (map-elt mention :start))
              (end (map-elt mention :end))
              (relative-path (map-elt mention :path))
-             (expanded-path (expand-file-name relative-path (agent-shell-cwd)))
+             (expanded-path (expand-file-name relative-path (agent-shell-project-root)))
              (resolved-path (agent-shell--resolve-path expanded-path)))
         ;; Add text before mention
         (when (> start pos)
@@ -3997,11 +3996,11 @@ If FILE-PATH is not an image, returns nil."
 
 (defun agent-shell-project-buffers ()
   "Return all shell buffers in the same project as current buffer."
-  (let ((project-root (agent-shell-cwd)))
+  (let ((project-root (agent-shell-project-root)))
     (seq-filter (lambda (buffer)
                   (equal project-root
                          (with-current-buffer buffer
-                           (agent-shell-cwd))))
+                           (agent-shell-project-root))))
                 (agent-shell-buffers))))
 
 (cl-defun agent-shell--shell-buffer (&key viewport-buffer no-error no-create)
@@ -4273,7 +4272,7 @@ The captured screenshot file path is then inserted into the shell prompt.
 
 When PICK-SHELL is non-nil, prompt for which shell buffer to use."
   (interactive)
-  (let* ((screenshots-dir (expand-file-name ".agent-shell/screenshots" (agent-shell-cwd)))
+  (let* ((screenshots-dir (expand-file-name ".agent-shell/screenshots" (agent-shell-project-root)))
          (screenshot-path (agent-shell--capture-screenshot :destination-dir screenshots-dir))
          (shell-buffer (when pick-shell
                          (completing-read "Send screenshot to shell: "
@@ -4292,7 +4291,7 @@ When PICK-SHELL is non-nil, prompt for which shell buffer to use."
 (defun agent-shell-send-clipboard-image (&optional pick-shell)
   "Paste clipboard image and insert it into `agent-shell'.
 
-Needs external utilities. See `agent-shell-clipboard-image-handlers'
+Needs external utilities.  See `agent-shell-clipboard-image-handlers'
 for details.
 
 The image is saved to .agent-shell/screenshots in the project root.
@@ -4300,7 +4299,7 @@ The saved image file path is then inserted into the shell prompt.
 
 When PICK-SHELL is non-nil, prompt for which shell buffer to use."
   (interactive)
-  (let* ((screenshots-dir (expand-file-name ".agent-shell/screenshots" (agent-shell-cwd)))
+  (let* ((screenshots-dir (expand-file-name ".agent-shell/screenshots" (agent-shell-project-root)))
          (image-path (agent-shell--save-clipboard-image :destination-dir screenshots-dir))
          (shell-buffer (when pick-shell
                          (completing-read "Send image to shell: "
@@ -4322,10 +4321,10 @@ When PICK-SHELL is non-nil, prompt for which shell buffer to use."
 If the clipboard contains an image, save it and insert as file context.
 Otherwise, invoke `yank' with ARG as usual.
 
-Needs external utilities. See `agent-shell-clipboard-image-handlers'
+Needs external utilities.  See `agent-shell-clipboard-image-handlers'
 for details."
   (interactive "*P")
-  (let* ((screenshots-dir (expand-file-name ".agent-shell/screenshots" (agent-shell-cwd)))
+  (let* ((screenshots-dir (expand-file-name ".agent-shell/screenshots" (agent-shell-project-root)))
          (image-path (agent-shell--save-clipboard-image :destination-dir screenshots-dir
                                                         :no-error t)))
     (if image-path
@@ -4866,7 +4865,7 @@ When PICK-SHELL is non-nil, prompt for which shell buffer to use."
      :text (agent-shell--get-region-context
             :deactivate t
             :agent-cwd (with-current-buffer shell-buffer
-                         (agent-shell-cwd)))
+                         (agent-shell-project-root)))
      :shell-buffer shell-buffer)))
 
 (defun agent-shell-send-region-to ()
@@ -5138,7 +5137,7 @@ The sources checked are controlled by `agent-shell-context-sources'."
                (not (region-active-p)))
     (let ((agent-cwd (when shell-buffer
                        (with-current-buffer shell-buffer
-                         (agent-shell-cwd)))))
+                         (agent-shell-project-root)))))
       (seq-some
        (lambda (source)
          (pcase source
@@ -5544,7 +5543,7 @@ When nil, transcript saving is disabled."
 For example:
 
  project/.agent-shell/transcripts/."
-  (let* ((dir (expand-file-name ".agent-shell/transcripts" (agent-shell-cwd)))
+  (let* ((dir (expand-file-name ".agent-shell/transcripts" (agent-shell-project-root)))
          (filename (format-time-string "%F-%H-%M-%S.md"))
          (filepath (expand-file-name filename dir)))
     filepath))
@@ -5583,7 +5582,7 @@ Returns the file path, or nil if disabled."
 "
                      agent-name
                      (format-time-string "%F %T")
-                     (agent-shell-cwd))
+                     (agent-shell-project-root))
              nil filepath nil 'no-message)
             (message "Created %s"
                      (agent-shell--shorten-paths filepath t)))
