@@ -278,6 +278,16 @@ Use TERMINAL when already looked up."
         (setf (map-elt entry :cleanup-timer) timer)
         (agent-shell--terminal-put state terminal-id entry)))))
 
+
+(defun agent-shell--terminal-not-found-error (state request-id)
+  "Send a terminal-not-found error response for REQUEST-ID via STATE."
+  (acp-send-response
+   :client (map-elt state :client)
+   :response `((:request-id . ,request-id)
+               (:error . ,(acp-make-error
+                           :code -32002
+                           :message "Terminal not found")))))
+
 (cl-defun agent-shell--on-terminal-create-request (&key state request)
   "Handle terminal/create REQUEST with STATE."
   (let-alist request
@@ -350,25 +360,20 @@ Use TERMINAL when already looked up."
   (let-alist request
     (let* ((terminal-id (agent-shell--meta-lookup .params 'terminalId))
            (terminal (and terminal-id (agent-shell--terminal-get state terminal-id))))
-      (if terminal
-          (let* ((slice (agent-shell--terminal-output-slice terminal))
-                 (output (car slice))
-                 (truncated (if (cdr slice) t :false))
-                 (exit-status (agent-shell--terminal-exit-status terminal)))
-            (agent-shell--terminal-touch state terminal-id terminal)
-            (acp-send-response
-             :client (map-elt state :client)
-             :response `((:request-id . ,.id)
-                         (:result . ((output . ,output)
-                                     (truncated . ,truncated)
-                                     ,@(when exit-status
-                                         `((exitStatus . ,exit-status))))))))
-        (acp-send-response
-         :client (map-elt state :client)
-         :response `((:request-id . ,.id)
-                     (:error . ,(acp-make-error
-                                 :code -32002
-                                 :message "Terminal not found"))))))))
+      (if (not terminal)
+          (agent-shell--terminal-not-found-error state .id)
+        (let* ((slice (agent-shell--terminal-output-slice terminal))
+               (output (car slice))
+               (truncated (if (cdr slice) t :false))
+               (exit-status (agent-shell--terminal-exit-status terminal)))
+          (agent-shell--terminal-touch state terminal-id terminal)
+          (acp-send-response
+           :client (map-elt state :client)
+           :response `((:request-id . ,.id)
+                       (:result . ((output . ,output)
+                                   (truncated . ,truncated)
+                                   ,@(when exit-status
+                                       `((exitStatus . ,exit-status))))))))))))
 
 (cl-defun agent-shell--on-terminal-wait-for-exit-request (&key state request)
   "Handle terminal/wait_for_exit REQUEST with STATE."
@@ -378,12 +383,7 @@ Use TERMINAL when already looked up."
            (exit-status (and terminal (agent-shell--terminal-exit-status terminal))))
       (cond
        ((not terminal)
-        (acp-send-response
-         :client (map-elt state :client)
-         :response `((:request-id . ,.id)
-                     (:error . ,(acp-make-error
-                                 :code -32002
-                                 :message "Terminal not found")))))
+        (agent-shell--terminal-not-found-error state .id))
        (exit-status
         (agent-shell--terminal-touch state terminal-id terminal)
         (acp-send-response
@@ -410,12 +410,7 @@ Use TERMINAL when already looked up."
              :client (map-elt state :client)
              :response `((:request-id . ,.id)
                          (:result . nil))))
-        (acp-send-response
-         :client (map-elt state :client)
-         :response `((:request-id . ,.id)
-                     (:error . ,(acp-make-error
-                                 :code -32002
-                                 :message "Terminal not found"))))))))
+        (agent-shell--terminal-not-found-error state .id)))))
 
 (cl-defun agent-shell--on-terminal-release-request (&key state request)
   "Handle terminal/release REQUEST with STATE."
@@ -434,13 +429,7 @@ Use TERMINAL when already looked up."
              :client (map-elt state :client)
              :response `((:request-id . ,.id)
                          (:result . nil))))
-        (acp-send-response
-         :client (map-elt state :client)
-         :response `((:request-id . ,.id)
-                     (:error . ,(acp-make-error
-                                 :code -32002
-                                 :message "Terminal not found"))))))))
-
+        (agent-shell--terminal-not-found-error state .id)))))
 
 (provide 'agent-shell-terminal)
 
