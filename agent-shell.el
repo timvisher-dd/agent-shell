@@ -896,9 +896,8 @@ When FORCE is non-nil, skip confirmation prompt."
 (defun agent-shell--filter-buffer-substring (start end &optional delete)
   "Return the buffer substring between START and END, after filtering.
 Strip the text properties `line-prefix' and `wrap-prefix' from the
-copied substring.  If DELETE is non-nil, delete the text between START and
-END from the buffer."
-  (let ((text (if delete
+copied substring.  If DELETE is non-nil, delete the text between START
+and END from the buffer."  (let ((text (if delete
                   (prog1 (buffer-substring start end)
                     (delete-region start end))
                 (buffer-substring start end))))
@@ -907,6 +906,30 @@ END from the buffer."
                             text)
     text))
 
+(defun agent-shell--prompt-undo-enabled-p ()
+  "Return non-nil when undo should be enabled for prompt entry."
+  (and (derived-mode-p 'agent-shell-mode)
+       (not (shell-maker-busy))))
+
+(defun agent-shell--set-undo-enabled (enabled)
+  "Enable undo recording for the current buffer when ENABLED is non-nil."
+  (if enabled
+      (when (eq buffer-undo-list t)
+        (setq-local buffer-undo-list nil))
+    (when (not (eq buffer-undo-list t))
+      (setq-local buffer-undo-list t))))
+
+(defun agent-shell--refresh-undo-state ()
+  "Enable undo only while editing the active prompt."
+  (when (derived-mode-p 'agent-shell-mode)
+    (agent-shell--set-undo-enabled (agent-shell--prompt-undo-enabled-p))))
+
+(defun agent-shell--disable-undo-after-submit (&rest _args)
+  "Disable undo after prompt submission."
+  (when (derived-mode-p 'agent-shell-mode)
+    (agent-shell--set-undo-enabled nil)))
+
+(advice-add 'shell-maker-submit :after #'agent-shell--disable-undo-after-submit)
 (defvar-keymap agent-shell-mode-map
   :parent shell-maker-mode-map
   :doc "Keymap for `agent-shell-mode'."
