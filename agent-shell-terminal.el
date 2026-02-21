@@ -256,9 +256,7 @@ Use TERMINAL when already looked up."
     (when (map-elt entry :released)
       (when-let ((timer (map-elt entry :cleanup-timer)))
         (ignore-errors (cancel-timer timer)))
-      (let* ((timeout (if (numberp agent-shell--terminal-release-grace-seconds)
-                          agent-shell--terminal-release-grace-seconds
-                        120))
+      (let* ((timeout agent-shell--terminal-release-grace-seconds)
              (timer (run-at-time
                      timeout nil
                      (lambda ()
