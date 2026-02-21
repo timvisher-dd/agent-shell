@@ -274,17 +274,19 @@ Refresh cleanup timer when released."
       (when-let ((timer (map-elt entry :cleanup-timer)))
         (ignore-errors (cancel-timer timer)))
       (let* ((timeout agent-shell--terminal-release-grace-seconds)
+             (state state)
+             (terminal-id terminal-id)
              (timer (run-at-time
                      timeout nil
                      (lambda ()
                        (when (buffer-live-p buffer)
                          (with-current-buffer buffer
-                           (when-let ((current (agent-shell--terminal-get agent-shell--state terminal-id)))
+                           (when-let ((current (agent-shell--terminal-get state terminal-id)))
                              (let* ((last (or (map-elt current :last-access) 0))
                                     (elapsed (- (float-time) last)))
                                (when (and (map-elt current :released)
                                           (<= timeout elapsed))
-                                 (agent-shell--terminal-remove agent-shell--state terminal-id))))))))))
+                                 (agent-shell--terminal-remove state terminal-id))))))))))
         (setf (map-elt entry :cleanup-timer) timer)
         (agent-shell--terminal-put state terminal-id entry)))))
 
