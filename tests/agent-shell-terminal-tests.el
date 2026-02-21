@@ -240,6 +240,32 @@ Binds BUFFER, OUTPUT-BUFFER, TERMINAL-ID, and STATE, then cleans up."
     (with-current-buffer output-buffer
       (should (equal (buffer-string) "chunk-Achunk-B")))))
 
+(ert-deftest agent-shell--terminal-has-terminal-flag-persists-test ()
+  "Persist terminal flag across updates without terminal content."
+  (agent-shell--with-terminal-test-fixture buffer output-buffer terminal-id agent-shell--state
+    (with-current-buffer buffer
+      (agent-shell--on-notification
+       :state agent-shell--state
+       :notification `((method . "session/update")
+                       (params . ((update . ((sessionUpdate . "tool_call")
+                                              (toolCallId . "call-has-terminal")
+                                              (status . "in_progress")
+                                              (title . "Terminal")
+                                              (kind . "tool")
+                                              (content . [((type . "terminal")
+                                                           (terminalId . ,terminal-id))]))))))))
+    (with-current-buffer buffer
+      (should (map-nested-elt agent-shell--state '(:tool-calls "call-has-terminal" :has-terminal))))
+    (with-current-buffer buffer
+      (agent-shell--on-notification
+       :state agent-shell--state
+       :notification `((method . "session/update")
+                       (params . ((update . ((sessionUpdate . "tool_call_update")
+                                              (toolCallId . "call-has-terminal")
+                                              (status . "completed"))))))))
+    (with-current-buffer buffer
+      (should (map-nested-elt agent-shell--state '(:tool-calls "call-has-terminal" :has-terminal))))))
+
 
 (ert-deftest agent-shell--terminal-release-cleanup-after-inactivity-test ()
   "Released terminals are cleaned up after inactivity."
