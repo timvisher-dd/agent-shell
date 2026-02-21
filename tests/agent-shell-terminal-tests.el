@@ -267,6 +267,35 @@ Binds BUFFER, OUTPUT-BUFFER, TERMINAL-ID, and STATE, then cleans up."
       (should (map-nested-elt agent-shell--state '(:tool-calls "call-has-terminal" :has-terminal))))))
 
 
+(ert-deftest agent-shell--terminal-output-continues-after-final-update-test ()
+  "Terminal output keeps streaming after a final tool_call_update."
+  (agent-shell--with-terminal-test-fixture buffer output-buffer terminal-id agent-shell--state
+    (with-current-buffer buffer
+      (agent-shell--on-notification
+       :state agent-shell--state
+       :notification `((method . "session/update")
+                       (params . ((update . ((sessionUpdate . "tool_call")
+                                              (toolCallId . "call-marker")
+                                              (status . "in_progress")
+                                              (title . "Terminal")
+                                              (kind . "tool")
+                                              (content . [((type . "terminal")
+                                                           (terminalId . ,terminal-id))]))))))))
+    (agent-shell--terminal-handle-output
+     agent-shell--state
+     terminal-id
+     "first " )
+    (agent-shell--handle-tool-call-update-streaming
+     agent-shell--state
+     `((toolCallId . "call-marker")
+       (status . "completed")))
+    (agent-shell--terminal-handle-output
+     agent-shell--state
+     terminal-id
+     "second")
+    (with-current-buffer buffer
+      (should (string-match-p "first\(?:.\|\n\)*second" (buffer-string))))))
+
 (ert-deftest agent-shell--terminal-release-cleanup-after-inactivity-test ()
   "Released terminals are cleaned up after inactivity."
   (let* ((buffer (get-buffer-create " *agent-shell-terminal-cleanup*"))
