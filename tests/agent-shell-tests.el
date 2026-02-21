@@ -191,21 +191,21 @@
   (dolist (test-case `(;; Graphical display mode
                        ( :graphic t
                          :homogeneous-expected
-                         ,(concat " pending   Update state initialization\n"
-                                  " pending   Update session initialization")
+                         ,(concat " pending  Update state initialization\n"
+                                  " pending  Update session initialization")
                          :mixed-expected
-                         ,(concat " pending       First task\n"
-                                  " in progress   Second task\n"
-                                  " completed     Third task"))
+                         ,(concat " pending      First task\n"
+                                  " in progress  Second task\n"
+                                  " completed    Third task"))
                        ;; Terminal display mode
                        ( :graphic nil
                          :homogeneous-expected
-                         ,(concat "[pending]  Update state initialization\n"
-                                  "[pending]  Update session initialization")
+                         ,(concat "[pending] Update state initialization\n"
+                                  "[pending] Update session initialization")
                          :mixed-expected
-                         ,(concat "[pending]      First task\n"
-                                  "[in progress]  Second task\n"
-                                  "[completed]    Third task"))))
+                         ,(concat "[pending]     First task\n"
+                                  "[in progress] Second task\n"
+                                  "[completed]   Third task"))))
     (cl-letf (((symbol-function 'display-graphic-p)
                (lambda (&optional _display) (plist-get test-case :graphic))))
       ;; Test homogeneous statuses
@@ -376,7 +376,9 @@
 
           ;; Mock agent-shell-cwd
           (cl-letf (((symbol-function 'agent-shell-cwd)
-                     (lambda () default-directory)))
+                     (lambda () default-directory))
+                    ((symbol-function 'agent-shell--image-type-to-mime)
+                     (lambda (_filename) "image/png")))
 
             ;; Test with image and embedded context support - should use ContentBlock::Image
             (let ((agent-shell--state (list
@@ -389,7 +391,6 @@
                 (should (equal (map-elt (nth 0 blocks) 'type) "text"))
                 (should (equal (map-elt (nth 0 blocks) 'text) "Analyze"))
 
-                ;; Check image block
                 (let ((image-block (nth 1 blocks)))
                   (should (equal (map-elt image-block 'type) "image"))
 
@@ -474,7 +475,9 @@
     ;; Mock acp-send-request to capture what gets sent
     (cl-letf (((symbol-function 'acp-send-request)
                (lambda (&rest args)
-                 (setq sent-request args))))
+                 (setq sent-request args)))
+              ((symbol-function 'agent-shell-viewport--buffer)
+               (lambda (&rest _args) nil)))
 
       ;; Send a simple command
       (agent-shell--send-command
@@ -507,7 +510,9 @@
                  (error "Simulated error in build-content-blocks")))
               ((symbol-function 'acp-send-request)
                (lambda (&rest args)
-                 (setq sent-request args))))
+                 (setq sent-request args)))
+              ((symbol-function 'agent-shell-viewport--buffer)
+               (lambda (&rest _args) nil)))
 
       ;; First, verify that build-content-blocks actually throws an error
       (should-error (agent-shell--build-content-blocks "Test prompt")
@@ -1149,25 +1154,30 @@ code block content
 
 (ert-deftest agent-shell--format-session-date-test ()
   "Test `agent-shell--format-session-date' humanizes timestamps."
-  ;; Today
-  (let* ((now (current-time))
-         (today-iso (format-time-string "%Y-%m-%dT10:30:00Z" now)))
-    (should (equal (agent-shell--format-session-date today-iso)
-                   "Today, 10:30")))
-  ;; Yesterday
-  (let* ((yesterday (time-subtract (current-time) (* 24 60 60)))
-         (yesterday-iso (format-time-string "%Y-%m-%dT15:45:00Z" yesterday)))
-    (should (equal (agent-shell--format-session-date yesterday-iso)
-                   "Yesterday, 15:45")))
-  ;; Same year, older
-  (should (string-match-p "^[A-Z][a-z]+ [0-9]+, [0-9]+:[0-9]+"
-                           (agent-shell--format-session-date "2026-01-05T09:00:00Z")))
-  ;; Different year
-  (should (string-match-p "^[A-Z][a-z]+ [0-9]+, [0-9]\\{4\\}"
-                           (agent-shell--format-session-date "2025-06-15T12:00:00Z")))
-  ;; Invalid input falls back gracefully
-  (should (equal (agent-shell--format-session-date "not-a-date")
-                 "not-a-date")))
+  (let ((fixed-now (date-to-time "2026-02-21T12:00:00Z")))
+    (cl-letf (((symbol-function 'current-time) (lambda () fixed-now)))
+      ;; Today
+      (let* ((today-time (date-to-time "2026-02-21T10:30:00Z"))
+             (today-expected (format-time-string "Today, %H:%M" today-time)))
+        (should (equal (agent-shell--format-session-date "2026-02-21T10:30:00Z")
+                       today-expected)))
+      ;; Yesterday
+      (let* ((yesterday-time (date-to-time "2026-02-20T15:45:00Z"))
+             (yesterday-expected (format-time-string "Yesterday, %H:%M" yesterday-time)))
+        (should (equal (agent-shell--format-session-date "2026-02-20T15:45:00Z")
+                       yesterday-expected)))
+      ;; Same year, older
+      (should (string-match-p "^[A-Z][a-z]+ [0-9]+, [0-9]+:[0-9]+"
+                              (agent-shell--format-session-date "2026-01-05T09:00:00Z")))
+      ;; Different year
+      (should (string-match-p "^[A-Z][a-z]+ [0-9]+, [0-9]\\{4\\}"
+                              (agent-shell--format-session-date "2025-06-15T12:00:00Z")))
+      ;; Invalid input falls back gracefully
+      (cl-letf (((symbol-function 'date-to-time)
+                 (lambda (_timestamp)
+                   (error "Unparseable timestamp"))))
+        (should (equal (agent-shell--format-session-date "not-a-date")
+                       "not-a-date"))))))
 
 (ert-deftest agent-shell--prompt-select-session-test ()
   "Test `agent-shell--prompt-select-session' choices."
@@ -1342,7 +1352,7 @@ code block content
   (should (null (agent-shell--extract-tool-parameters
                  '((plan . "Step 1: do something"))))))
 
-(ert-deftest agent-shell--make-transcript-tool-call-entry-test ()
+(ert-deftest agent-shell--make-transcript-tool-call-entry-parameters-test ()
   "Test `agent-shell--make-transcript-tool-call-entry' with parameters."
   ;; Test basic entry without parameters
   (let ((entry (agent-shell--make-transcript-tool-call-entry
