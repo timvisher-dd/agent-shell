@@ -39,11 +39,9 @@
 (declare-function agent-shell--make-diff-info "agent-shell")
 (declare-function agent-shell--format-diff-as-text "agent-shell")
 (declare-function agent-shell--append-transcript "agent-shell")
-(declare-function agent-shell--make-transcript-tool-call-entry "agent-shell")
 (declare-function agent-shell--delete-fragment "agent-shell")
 (declare-function agent-shell--update-fragment "agent-shell")
 (declare-function agent-shell-make-tool-call-label "agent-shell")
-(declare-function agent-shell--save-tool-call "agent-shell")
 (declare-function agent-shell--terminal-unlink-tool-call-content "agent-shell-terminal")
 
 (defvar agent-shell-tool-use-expand-by-default)
@@ -108,6 +106,20 @@ INCLUDE-CONTENT and INCLUDE-DIFF control optional fields."
               (list (cons :title command)))
             (when diff
               (list (cons :diff diff))))))
+
+(defun agent-shell--save-tool-call (state tool-call-id tool-call)
+  "Store TOOL-CALL with TOOL-CALL-ID in STATE's :tool-calls alist."
+  (let* ((tool-calls (map-elt state :tool-calls))
+         (old-tool-call (map-elt tool-calls tool-call-id))
+         (updated-tools (copy-alist tool-calls))
+         (tool-call-overrides (seq-filter (lambda (pair)
+                                            (cdr pair))
+                                          tool-call)))
+    (setf (map-elt updated-tools tool-call-id)
+          (if old-tool-call
+              (map-merge 'alist old-tool-call tool-call-overrides)
+            tool-call-overrides))
+    (map-put! state :tool-calls updated-tools)))
 
 (defun agent-shell--tool-call-append-output-chunk (state tool-call-id chunk)
   "Append CHUNK to tool call output buffer for TOOL-CALL-ID in STATE."
@@ -360,6 +372,29 @@ OUTPUT-TEXT overrides content-derived output."
          :body (string-trim body-text)
          :navigation 'always
          :expanded agent-shell-tool-use-expand-by-default)))))
+
+(cl-defun agent-shell--make-transcript-tool-call-entry (&key status title kind description command output)
+  "Create a formatted transcript entry for a tool call.
+
+Includes STATUS, TITLE, KIND, DESCRIPTION, COMMAND, and OUTPUT."
+  (concat
+   (format "\n\n### Tool Call [%s]: %s\n"
+           (or status "no status") (or title ""))
+   (when kind
+     (format "\n**Tool:** %s" kind))
+   (format "\n**Timestamp:** %s" (format-time-string "%F %T"))
+   (when description
+     (format "\n**Description:** %s" description))
+   (when command
+     (format "\n**Command:** %s" command))
+   "\n\n"
+   "```"
+   "\n"
+   (string-trim
+    (string-trim (string-trim output) "^```" "```$"))
+   "\n"
+   "```"
+   "\n"))
 
 (provide 'agent-shell-tools)
 

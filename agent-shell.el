@@ -1764,23 +1764,6 @@ DIFF should be in the form returned by `agent-shell--make-diff-info':
       (shell-maker-finish-output :config shell-maker--config
                                  :success t))))
 
-(defun agent-shell--save-tool-call (state tool-call-id tool-call)
-  "Store TOOL-CALL with TOOL-CALL-ID in STATE's :tool-calls alist."
-  (let* ((tool-calls (map-elt state :tool-calls))
-         (old-tool-call (map-elt tool-calls tool-call-id))
-         (updated-tools (copy-alist tool-calls))
-         (tool-call-overrides (seq-filter (lambda (pair)
-                                            (cdr pair))
-                                          tool-call)))
-    (when-let ((content (map-elt tool-call-overrides :content)))
-      (when (agent-shell--tool-call-terminal-ids content)
-        (setf (map-elt tool-call-overrides :has-terminal) t)))
-    (setf (map-elt updated-tools tool-call-id)
-          (if old-tool-call
-              (map-merge 'alist old-tool-call tool-call-overrides)
-            tool-call-overrides))
-    (map-put! state :tool-calls updated-tools)))
-
 (cl-defun agent-shell--make-error-dialog-text (&key code message raw-message)
   "Create formatted error dialog text with CODE, MESSAGE, and RAW-MESSAGE."
   (format "╭─
@@ -5473,72 +5456,6 @@ Returns the file path, or nil if disabled."
         (write-region text nil file-path t 'no-message)
       (error
        (message "Error writing to transcript: %S" err)))))
-
-(defun agent-shell--extract-tool-parameters (raw-input)
-  "Extract and format tool parameters from RAW-INPUT.
-Returns a formatted string of key parameters, or nil if no relevant
-parameters found.  Excludes `command' and `description' as these are
-already shown separately in transcript entries.
-
-For example, given RAW-INPUT:
-
-  \\='((filePath . \"/home/user/project/file.el\")
-    (offset . 10)
-    (limit . 20)
-    (command . \"grep -r foo\")
-    (description . \"Search for foo\"))
-
-returns:
-
-  \"filePath: /home/user/project/file.el
-  offset: 10
-  limit: 20\""
-  (when-let* ((raw-input)
-            (excluded-keys '(command description plan))
-            (params (seq-remove
-                     (lambda (pair)
-                       (let ((key (car pair))
-                             (value (cdr pair)))
-                         (or (memq key excluded-keys)
-                             (null value)
-                             (and (stringp value) (string-empty-p value)))))
-                     raw-input)))
-  (mapconcat (lambda (pair)
-               (format "%s: %s"
-                       (symbol-name (car pair))
-                       (cond
-                        ((stringp (cdr pair)) (cdr pair))
-                        ((numberp (cdr pair)) (number-to-string (cdr pair)))
-                        ((eq (cdr pair) t) "true")
-                        (t (prin1-to-string (cdr pair))))))
-             params
-             "\n")))
-
-(cl-defun agent-shell--make-transcript-tool-call-entry (&key status title kind description command parameters output)
-  "Create a formatted transcript entry for a tool call.
-
-Includes STATUS, TITLE, KIND, DESCRIPTION, COMMAND, PARAMETERS, and OUTPUT."
-  (concat
-   (format "\n\n### Tool Call [%s]: %s\n"
-           (or status "no status") (or title ""))
-   (when kind
-     (format "\n**Tool:** %s" kind))
-   (format "\n**Timestamp:** %s" (format-time-string "%F %T"))
-   (when description
-     (format "\n**Description:** %s" description))
-   (when command
-     (format "\n**Command:** %s" command))
-   (when parameters
-     (format "\n**Parameters:**\n%s" parameters))
-   "\n\n"
-   "```"
-   "\n"
-   (string-trim
-    (string-trim (string-trim output) "^```" "```$"))
-   "\n"
-   "```"
-   "\n"))
-
 (defun agent-shell-open-transcript ()
   "Open the transcript file for the current `agent-shell' buffer."
   (interactive)

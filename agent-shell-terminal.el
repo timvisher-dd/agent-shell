@@ -34,6 +34,7 @@
 (require 'map)
 (require 'subr-x)
 (require 'agent-shell-meta)
+(require 'agent-shell-tools)
 
 (declare-function agent-shell--build-command-for-execution "agent-shell")
 (declare-function agent-shell--resolve-path "agent-shell")
@@ -106,7 +107,6 @@
   "Return live output buffer for TERMINAL."
   (let ((buffer (map-elt terminal :output-buffer)))
     (when (buffer-live-p buffer) buffer)))
-
 
 (defun agent-shell--tool-call-terminal-ids (content)
   "Return terminal IDs from tool call CONTENT."
@@ -249,11 +249,9 @@ truncated if any bytes were present."
         (setf (map-elt terminal :waiters) nil)
         (agent-shell--terminal-put state terminal-id terminal)))))
 
-
 (defun agent-shell--terminal-touch (state terminal-id &optional terminal)
   "Record terminal access for TERMINAL-ID in STATE.
-Refresh cleanup timer when released.  Use TERMINAL when already looked up."
-  (when-let ((entry (or terminal (agent-shell--terminal-get state terminal-id))))
+Refresh cleanup timer when released."  (when-let ((entry (or terminal (agent-shell--terminal-get state terminal-id))))
     (setf (map-elt entry :last-access) (float-time))
     (agent-shell--terminal-put state terminal-id entry)
     (when (map-elt entry :released)
@@ -266,7 +264,6 @@ Refresh cleanup timer when released.  Use TERMINAL when already looked up."
     (when (map-elt terminal :released)
       (agent-shell--terminal-schedule-cleanup state terminal-id))))
 
-
 (defun agent-shell--terminal-maybe-finalize (state terminal-id proc)
   "Finalize TERMINAL-ID in STATE if PROC has exited."
   (when (memq (process-status proc) '(exit signal))
@@ -274,9 +271,7 @@ Refresh cleanup timer when released.  Use TERMINAL when already looked up."
       (agent-shell--terminal-finalize state terminal-id))))
 
 (defun agent-shell--terminal-schedule-cleanup (state terminal-id &optional terminal)
-  "Schedule cleanup for TERMINAL-ID in STATE after inactivity.
-Use TERMINAL when already looked up."
-  (when-let* ((buffer (map-elt state :buffer))
+  "Schedule cleanup for TERMINAL-ID in STATE after inactivity."  (when-let* ((buffer (map-elt state :buffer))
               (entry (or terminal (agent-shell--terminal-get state terminal-id))))
     (when (map-elt entry :released)
       (when-let ((timer (map-elt entry :cleanup-timer)))
@@ -295,7 +290,6 @@ Use TERMINAL when already looked up."
                                  (agent-shell--terminal-remove agent-shell--state terminal-id))))))))))
         (setf (map-elt entry :cleanup-timer) timer)
         (agent-shell--terminal-put state terminal-id entry)))))
-
 
 (defun agent-shell--terminal-not-found-error (state request-id)
   "Send a terminal-not-found error response for REQUEST-ID via STATE."
@@ -340,11 +334,11 @@ Use TERMINAL when already looked up."
                              (:waiters . nil)
                              (:released . nil)
                              (:cleanup-timer . nil)
-                             (:last-access . ,(float-time)))))
-            (unless (file-directory-p default-directory)
-              (error "Terminal/create cwd not found: %s" default-directory))
-            (let* ((proc (make-process
-                          :name (format "agent-shell-terminal-%s" terminal-id)
+                             (:last-access . ,(float-time))))
+                 (proc (progn
+                         (unless (file-directory-p default-directory)
+                           (error "Terminal/create cwd not found: %s" default-directory))
+                         (make-process                          :name (format "agent-shell-terminal-%s" terminal-id)
                           :buffer output-buffer
                           :command command-list
                           :noquery t
