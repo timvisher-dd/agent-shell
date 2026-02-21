@@ -1125,49 +1125,53 @@ COMMAND, when present, may be a shell command string or an argv vector."
            (let ((update (map-elt (map-elt notification 'params) 'update)))
              (cond
               ((equal (map-elt update 'sessionUpdate) "tool_call")
-               (agent-shell--save-tool-call
-                state
-                (map-elt update 'toolCallId)
-                (append (list (cons :title (cond
-                                            ((and (string= (map-elt update 'title) "Skill")
-                                                  (map-nested-elt update '(rawInput command)))
-                                             (format "Skill: %s"
-                                                     (agent-shell--tool-call-command-to-string
-                                                      (map-nested-elt update '(rawInput command)))))
-                                            (t
-                                             (map-elt update 'title))))
-                              (cons :status (map-elt update 'status))
-                              (cons :kind (map-elt update 'kind))
-                              (cons :command (agent-shell--tool-call-command-to-string
-                                              (map-nested-elt update '(rawInput command))))
-                              (cons :description (map-nested-elt update '(rawInput description)))
-                              (cons :content (map-elt update 'content))
-                              (cons :raw-input (map-elt update 'rawInput)))
-                        (when-let ((diff (agent-shell--make-diff-info :tool-call update)))
-                          (list (cons :diff diff)))))
-               (agent-shell--emit-event
-                :event 'tool-call-update
-                :data (list (cons :tool-call-id (map-elt update 'toolCallId))
-                            (cons :tool-call (map-nested-elt state (list :tool-calls (map-elt update 'toolCallId))))))
-               (let ((tool-call-labels (agent-shell-make-tool-call-label
-                                        state (map-elt update 'toolCallId))))
-                 (agent-shell--update-fragment
-                  :state state
-                  :block-id (map-elt update 'toolCallId)
-                  :label-left (map-elt tool-call-labels :status)
-                  :label-right (map-elt tool-call-labels :title)
-                  :expanded agent-shell-tool-use-expand-by-default)
-                 ;; Display plan as markdown block if present
-                 (when-let ((plan (map-nested-elt update '(rawInput plan))))
+               (let* ((content (map-elt update 'content))
+                      (has-terminal (agent-shell--tool-call-terminal-ids content)))
+                 (agent-shell--save-tool-call
+                  state
+                  (map-elt update 'toolCallId)
+                  (append (list (cons :title (cond
+                                              ((and (string= (map-elt update 'title) "Skill")
+                                                    (map-nested-elt update '(rawInput command)))
+                                               (format "Skill: %s"
+                                                       (agent-shell--tool-call-command-to-string
+                                                        (map-nested-elt update '(rawInput command)))))
+                                              (t
+                                               (map-elt update 'title))))
+                                (cons :status (map-elt update 'status))
+                                (cons :kind (map-elt update 'kind))
+                                (cons :command (agent-shell--tool-call-command-to-string
+                                                (map-nested-elt update '(rawInput command))))
+                                (cons :description (map-nested-elt update '(rawInput description)))
+                                (cons :content content)
+                                (cons :raw-input (map-elt update 'rawInput))
+                                (when has-terminal
+                                  (cons :has-terminal t)))
+                          (when-let ((diff (agent-shell--make-diff-info :tool-call update)))
+                            (list (cons :diff diff)))))
+                 (agent-shell--emit-event
+                  :event 'tool-call-update
+                  :data (list (cons :tool-call-id (map-elt update 'toolCallId))
+                              (cons :tool-call (map-nested-elt state (list :tool-calls (map-elt update 'toolCallId))))))
+                 (let ((tool-call-labels (agent-shell-make-tool-call-label
+                                          state (map-elt update 'toolCallId))))
                    (agent-shell--update-fragment
                     :state state
-                    :block-id (concat (map-elt update 'toolCallId) "-plan")
-                    :label-left (propertize "Proposed plan" 'font-lock-face 'font-lock-doc-markup-face)
-                    :body plan
-                    :expanded t)))
-               (agent-shell--terminal-link-tool-call-content
-                state (map-elt update 'toolCallId) (map-elt update 'content))
-               (map-put! state :last-entry-type "tool_call"))
+                    :block-id (map-elt update 'toolCallId)
+                    :label-left (map-elt tool-call-labels :status)
+                    :label-right (map-elt tool-call-labels :title)
+                    :expanded agent-shell-tool-use-expand-by-default)
+                   ;; Display plan as markdown block if present
+                   (when-let ((plan (map-nested-elt update '(rawInput plan))))
+                     (agent-shell--update-fragment
+                      :state state
+                      :block-id (concat (map-elt update 'toolCallId) "-plan")
+                      :label-left (propertize "Proposed plan" 'font-lock-face 'font-lock-doc-markup-face)
+                      :body plan
+                      :expanded t)))
+                 (agent-shell--terminal-link-tool-call-content
+                  state (map-elt update 'toolCallId) content)
+                 (map-put! state :last-entry-type "tool_call")))
               ((equal (map-elt update 'sessionUpdate) "agent_thought_chunk")
                (let-alist update
                  ;; (message "agent_thought_chunk: last-type=%s, will-append=%s"
@@ -1250,6 +1254,11 @@ COMMAND, when present, may be a shell command string or an argv vector."
                (agent-shell--handle-tool-call-update-streaming state update)
                (agent-shell--terminal-link-tool-call-content
                 state (map-elt update 'toolCallId) (map-elt update 'content))
+               (when (agent-shell--tool-call-terminal-ids (map-elt update 'content))
+                 (agent-shell--save-tool-call
+                  state
+                  (map-elt update 'toolCallId)
+                  (list (cons :has-terminal t))))
                (map-put! state :last-entry-type "tool_call_update"))
               ((equal (map-elt update 'sessionUpdate) "available_commands_update")
                (let-alist update
@@ -1527,16 +1536,14 @@ INCLUDE-CONTENT and INCLUDE-DIFF control optional fields."
          (status (map-elt update 'status))
          (meta-response (agent-shell--tool-call-meta-response-text update))
          (final (member status '("completed" "failed" "cancelled")))
-         (stored-content (map-nested-elt state `(:tool-calls ,tool-call-id :content)))
-         (terminal-ids (agent-shell--tool-call-terminal-ids
-                        (or stored-content (map-elt update 'content)))))
+         (has-terminal (map-nested-elt state `(:tool-calls ,tool-call-id :has-terminal))))
     (agent-shell--save-tool-call
      state
      tool-call-id
      (agent-shell--tool-call-update-overrides state update nil nil))
     (cond
      ;; Non-final meta toolResponse: output in _meta.*.toolResponse
-     ((and meta-response (not final) (not terminal-ids))
+     ((and meta-response (not final) (not has-terminal))
       (let ((chunk (agent-shell--tool-call-normalize-output meta-response)))
         (when (and chunk (not (string-empty-p chunk)))
           (agent-shell--tool-call-append-output-chunk state tool-call-id chunk)
@@ -1545,7 +1552,7 @@ INCLUDE-CONTENT and INCLUDE-DIFF control optional fields."
       (agent-shell--handle-tool-call-update
        state
        update
-       (if terminal-ids
+       (if has-terminal
            nil
          (or (agent-shell--tool-call-output-text state tool-call-id)
              (agent-shell--tool-call-content-text (map-elt update 'content)))))
@@ -1555,9 +1562,7 @@ INCLUDE-CONTENT and INCLUDE-DIFF control optional fields."
   "Handle tool call UPDATE in STATE immediately.
 OUTPUT-TEXT overrides content-derived output."
   (let-alist update
-    (let* ((stored-content (map-nested-elt state `(:tool-calls ,.toolCallId :content)))
-           (terminal-ids (agent-shell--tool-call-terminal-ids
-                          (or stored-content .content))))
+    (let ((has-terminal (map-nested-elt state `(:tool-calls ,.toolCallId :has-terminal))))
       ;; Update stored tool call data with new status and content
       (agent-shell--save-tool-call
        state
@@ -1566,61 +1571,62 @@ OUTPUT-TEXT overrides content-derived output."
       (let* ((diff (map-nested-elt state `(:tool-calls ,.toolCallId :diff)))
              (content-text (cond
                             (output-text output-text)
-                            (terminal-ids "")
+                            (has-terminal "")
                             (t (or (agent-shell--tool-call-content-text .content) ""))))
-           (output (if (string-empty-p content-text)
-                       ""
-                     (concat "
+             (output (if (string-empty-p content-text)
+                         ""
+                       (concat "
 
 " content-text "
 
 ")))
-           (diff-text (agent-shell--format-diff-as-text diff))
-           (body-text (if diff-text
-                          (concat output
-                                  "
+             (diff-text (agent-shell--format-diff-as-text diff))
+             (body-text (if diff-text
+                            (concat output
+                                    "
 
 "
-                                  "╭─────────╮
+                                    "╭─────────╮
 "
-                                  "│ changes │
+                                    "│ changes │
 "
-                                  "╰─────────╯
+                                    "╰─────────╯
 
-" diff-text)
-                        output)))
-      ;; Log tool call to transcript when completed or failed
-      (when (and (map-elt update 'status)
-                 (member (map-elt update 'status)
-                         '("completed" "failed" "cancelled")))
-        (agent-shell--append-transcript
-         :text (agent-shell--make-transcript-tool-call-entry
-                :status (map-elt update 'status)
-                :title (map-nested-elt state `(:tool-calls ,.toolCallId :title))
-                :kind (map-nested-elt state `(:tool-calls ,.toolCallId :kind))
-                :description (map-nested-elt state `(:tool-calls ,.toolCallId :description))
-                :command (map-nested-elt state `(:tool-calls ,.toolCallId :command))
-                :output body-text)
-         :file-path agent-shell--transcript-file))
-      ;; Hide permission after sending response.
-      ;; Status and permission are no longer pending. User
-      ;; likely selected one of: accepted/rejected/always.
-      ;; Remove stale permission dialog.
-      (when (and (map-elt update 'status)
-                 (not (equal (map-elt update 'status) "pending")))
-        ;; block-id must be the same as the one used as
-        ;; agent-shell--update-fragment param by "session/request_permission".
-        (agent-shell--delete-fragment :state state :block-id (format "permission-%s" .toolCallId)))
-      (let ((tool-call-labels (agent-shell-make-tool-call-label
-                               state .toolCallId)))
-        (agent-shell--update-fragment
-         :state state
-         :block-id .toolCallId
-         :label-left (map-elt tool-call-labels :status)
-         :label-right (map-elt tool-call-labels :title)
-         :body (string-trim body-text)
-         :navigation 'always
-         :expanded agent-shell-tool-use-expand-by-default))))))
+"
+                                    diff-text)
+                          output)))
+        ;; Log tool call to transcript when completed or failed
+        (when (and (map-elt update 'status)
+                   (member (map-elt update 'status)
+                           '("completed" "failed" "cancelled")))
+          (agent-shell--append-transcript
+           :text (agent-shell--make-transcript-tool-call-entry
+                  :status (map-elt update 'status)
+                  :title (map-nested-elt state `(:tool-calls ,.toolCallId :title))
+                  :kind (map-nested-elt state `(:tool-calls ,.toolCallId :kind))
+                  :description (map-nested-elt state `(:tool-calls ,.toolCallId :description))
+                  :command (map-nested-elt state `(:tool-calls ,.toolCallId :command))
+                  :output body-text)
+           :file-path agent-shell--transcript-file))
+        ;; Hide permission after sending response.
+        ;; Status and permission are no longer pending. User
+        ;; likely selected one of: accepted/rejected/always.
+        ;; Remove stale permission dialog.
+        (when (and (map-elt update 'status)
+                   (not (equal (map-elt update 'status) "pending")))
+          ;; block-id must be the same as the one used as
+          ;; agent-shell--update-fragment param by "session/request_permission".
+          (agent-shell--delete-fragment :state state :block-id (format "permission-%s" .toolCallId)))
+        (let ((tool-call-labels (agent-shell-make-tool-call-label
+                                 state .toolCallId)))
+          (agent-shell--update-fragment
+           :state state
+           :block-id .toolCallId
+           :label-left (map-elt tool-call-labels :status)
+           :label-right (map-elt tool-call-labels :title)
+           :body (string-trim body-text)
+           :navigation 'always
+           :expanded agent-shell-tool-use-expand-by-default))))))
 
 
 (cl-defun agent-shell--on-request (&key state request)
@@ -2125,6 +2131,9 @@ DIFF should be in the form returned by `agent-shell--make-diff-info':
          (tool-call-overrides (seq-filter (lambda (pair)
                                             (cdr pair))
                                           tool-call)))
+    (when-let ((content (map-elt tool-call-overrides :content)))
+      (when (agent-shell--tool-call-terminal-ids content)
+        (setf (map-elt tool-call-overrides :has-terminal) t)))
     (setf (map-elt updated-tools tool-call-id)
           (if old-tool-call
               (map-merge 'alist old-tool-call tool-call-overrides)
