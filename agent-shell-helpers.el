@@ -134,6 +134,15 @@ DATA is an optional alist of event-specific data."
         (with-current-buffer (map-elt agent-shell--state :buffer)
           (funcall (map-elt sub :on-event) event-alist))))))
 
+(defun agent-shell--ensure-list (value &optional include-scalar)
+  "Coerce VALUE to a list, converting vectors when needed.
+When INCLUDE-SCALAR is non-nil, wrap VALUE in a list if it is non-nil."
+  (cond
+   ((vectorp value) (append value nil))
+   ((listp value) value)
+   ((and include-scalar value) (list value))
+   (t nil)))
+
 (defun agent-shell--build-command-for-execution (command)
   "Build COMMAND for the configured execution environment.
 

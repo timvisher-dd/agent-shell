@@ -67,16 +67,9 @@
   (map-put! state :terminals
             (map-delete (map-elt state :terminals) terminal-id)))
 
-(defun agent-shell--terminal-ensure-list (value)
-  "Coerce VALUE to a list, converting vectors when needed."
-  (cond
-   ((vectorp value) (append value nil))
-   ((listp value) value)
-   (t nil)))
-
 (defun agent-shell--terminal-normalize-env (env)
   "Normalize ENV to a list of \"NAME=VALUE\" strings."
-  (let ((entries (agent-shell--terminal-ensure-list env)))
+  (let ((entries (agent-shell--ensure-list env)))
     (mapcan (lambda (entry)
               (let ((name (agent-shell--meta-lookup entry 'name))
                     (value (agent-shell--meta-lookup entry 'value)))
@@ -104,7 +97,7 @@
 
 (defun agent-shell--tool-call-terminal-ids (content)
   "Return terminal IDs from tool call CONTENT."
-  (let ((items (agent-shell--terminal-ensure-list content)))
+  (let ((items (agent-shell--ensure-list content)))
     (mapcan (lambda (item)
               (let ((type (agent-shell--meta-lookup item 'type)))
                 (when (and (stringp type) (equal type "terminal"))
@@ -305,7 +298,7 @@ Refresh cleanup timer when released."
     (condition-case err
         (let* ((params .params)
                (command (agent-shell--meta-lookup params 'command))
-               (args (agent-shell--terminal-ensure-list
+               (args (agent-shell--ensure-list
                       (agent-shell--meta-lookup params 'args)))
                (env (agent-shell--terminal-normalize-env
                      (agent-shell--meta-lookup params 'env)))

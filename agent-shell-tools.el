@@ -40,11 +40,7 @@
 
 (defun agent-shell--tool-call-content-text (content)
   "Return concatenated text from tool call CONTENT items."
-  (let* ((items (cond
-                 ((vectorp content) (append content nil))
-                 ((listp content) content)
-                 (content (list content))
-                 (t nil)))
+  (let* ((items (agent-shell--ensure-list content t))
          (parts (delq nil
                       (mapcar (lambda (item)
                                 (let-alist item
