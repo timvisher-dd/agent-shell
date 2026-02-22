@@ -1,9 +1,39 @@
 ;;; agent-shell-tests.el --- Tests for agent-shell -*- lexical-binding: t; -*-
 
 (require 'ert)
+(require 'keymap)
 (require 'agent-shell)
+(require 'time-date)
 
 ;;; Code:
+
+(defun agent-shell-test--with-time-zone (tz fn)
+  "Call FN with TZ configured and restore the prior time zone."
+  (let ((old-tz (getenv "TZ"))
+        (old-rule (when (boundp 'time-zone-rule) time-zone-rule)))
+    (unwind-protect
+        (progn
+          (setenv "TZ" tz)
+          (set-time-zone-rule tz)
+          (funcall fn))
+      (setenv "TZ" old-tz)
+      (when (boundp 'time-zone-rule)
+        (set-time-zone-rule old-rule)))))
+
+(defun agent-shell-test--iso-for-local-time (tz day-offset hour minute)
+  "Return a UTC ISO timestamp for local time in TZ.
+
+DAY-OFFSET is applied to the local date before encoding.
+HOUR and MINUTE specify the local time."
+  (let* ((now (current-time))
+         (decoded (decode-time now tz))
+         (day (+ (decoded-time-day decoded) day-offset))
+         (time (encode-time 0 minute hour
+                            day
+                            (decoded-time-month decoded)
+                            (decoded-time-year decoded)
+                            tz)))
+    (format-time-string "%Y-%m-%dT%H:%M:%SZ" time t)))
 
 (ert-deftest agent-shell-make-environment-variables-test ()
   "Test `agent-shell-make-environment-variables' function."
@@ -216,15 +246,15 @@
                                                   (status . "pending"))]))
                      (plist-get test-case :homogeneous-expected)))
 
-      ;; Test mixed statuses
-      (should (equal (substring-no-properties
-                      (agent-shell--format-plan [((content . "First task")
-                                                  (status . "pending"))
-                                                 ((content . "Second task")
-                                                  (status . "in_progress"))
-                                                 ((content . "Third task")
-                                                  (status . "completed"))]))
-                     (plist-get test-case :mixed-expected)))))
+        ;; Test mixed statuses
+        (should (equal (substring-no-properties
+                        (agent-shell--format-plan [((content . "First task")
+                                                    (status . "pending"))
+                                                   ((content . "Second task")
+                                                    (status . "in_progress"))
+                                                   ((content . "Third task")
+                                                    (status . "completed"))]))
+                       (plist-get test-case :mixed-expected))))))
 
   ;; Test empty entries
   (should (equal (agent-shell--format-plan []) "")))
@@ -431,19 +461,21 @@
               ;; Non-graphical Emacs: image-supported-file-p is unavailable,
               ;; so the PNG is treated as text/plain by the MIME resolver.
               ;; Verify the resource_link fallback still works.
-              (let ((agent-shell--state (list
-                                         (cons :prompt-capabilities '((:image . t) (:embedded-context . t))))))
-                (let ((blocks (agent-shell--build-content-blocks (format "Analyze @%s" file-name))))
-                  (should (= (length blocks) 2))
+              (cl-letf (((symbol-function 'agent-shell--image-type-to-mime)
+                         (lambda (_filename) nil)))
+                (let ((agent-shell--state (list
+                                           (cons :prompt-capabilities '((:image . t) (:embedded-context . t))))))
+                  (let ((blocks (agent-shell--build-content-blocks (format "Analyze @%s" file-name))))
+                    (should (= (length blocks) 2))
 
-                  ;; Text block is still present
-                  (should (equal (map-elt (nth 0 blocks) 'type) "text"))
-                  (should (equal (map-elt (nth 0 blocks) 'text) "Analyze"))
+                    ;; Text block is still present
+                    (should (equal (map-elt (nth 0 blocks) 'type) "text"))
+                    (should (equal (map-elt (nth 0 blocks) 'text) "Analyze"))
 
-                  ;; Without image MIME detection the file is embedded as a
-                  ;; resource (text/plain), not as an image block.
-                  (let ((block (nth 1 blocks)))
-                    (should (member (map-elt block 'type) '("resource" "resource_link")))))))))
+                    ;; Without image MIME detection the file is embedded as a
+                    ;; resource (text/plain), not as an image block.
+                    (let ((block (nth 1 blocks)))
+                      (should (member (map-elt block 'type) '("resource" "resource_link"))))))))))
 
       (delete-file temp-file))))
 
@@ -1399,5 +1431,52 @@ code block content
     (should (string-match-p "filePath: /home/user/test.txt" entry))
     (should (string-match-p "offset: 100" entry))))
 
+
+(ert-deftest agent-shell--initialize-request-omits-terminal-output-meta-test ()
+  "Initialize request should not include terminal_output meta capability."
+  (let* ((buffer (get-buffer-create " *agent-shell-init-request*"))
+         (agent-shell--state (agent-shell--make-state :buffer buffer)))
+    (map-put! agent-shell--state :client 'test-client)
+    (with-current-buffer buffer
+      (erase-buffer)
+      (agent-shell-mode)
+      (setq-local agent-shell--state agent-shell--state))
+    (unwind-protect
+        (let ((captured-request nil))
+          (cl-letf (((symbol-function 'acp-send-request)
+                     (lambda (&rest args)
+                       (setq captured-request (plist-get args :request)))))
+            (agent-shell--initiate-handshake
+             :shell-buffer buffer
+             :on-initiated (lambda () nil)))
+          (should-not (map-nested-elt captured-request
+                                      '(:params clientCapabilities _meta))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest agent-shell--tool-call-update-writes-output-test ()
+  "Tool call updates should write output to the shell buffer."
+  (let* ((buffer (get-buffer-create " *agent-shell-tool-call-output*"))
+         (agent-shell--state (agent-shell--make-state :buffer buffer)))
+    (map-put! agent-shell--state :client 'test-client)
+    (map-put! agent-shell--state :request-count 1)
+    (with-current-buffer buffer
+      (erase-buffer)
+      (agent-shell-mode))
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
+                   (lambda (&rest _args) nil)))
+          (with-current-buffer buffer
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :notification `((method . "session/update")
+                             (params . ((update . ((sessionUpdate . "tool_call_update")
+                                                    (toolCallId . "call-1")
+                                                    (status . "completed")
+                                                    (content . [((content . ((text . "stream chunk"))))]))))))))
+          (with-current-buffer buffer
+            (should (string-match-p "stream chunk" (buffer-string)))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here
