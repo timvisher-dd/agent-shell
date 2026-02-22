@@ -313,7 +313,7 @@ Use TERMINAL when already looked up."
                                           (<= timeout elapsed))
                                  (agent-shell--terminal-remove state terminal-id))))))))))
         (setf (map-elt entry :cleanup-timer) timer)
-        (agent-shell--terminal-put state terminal-id entry))))))
+        (agent-shell--terminal-put state terminal-id entry)))))
 
 (cl-defun agent-shell--on-notification (&key state notification)
   "Handle incoming notification using SHELL, STATE, and NOTIFICATION."

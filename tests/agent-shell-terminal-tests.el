@@ -164,47 +164,47 @@ Binds BUFFER, OUTPUT-BUFFER, TERMINAL-ID, and STATE, then cleans up."
 (ert-deftest agent-shell--terminal-output-prunes-final-tool-calls-test ()
   "Finalized tool calls no longer receive terminal output."
   (agent-shell--with-terminal-test-fixture buffer output-buffer terminal-id agent-shell--state
-    (with-current-buffer buffer
-      (agent-shell--on-notification
-       :state agent-shell--state
-       :notification `((method . "session/update")
-                       (params . ((update . ((sessionUpdate . "tool_call")
-                                              (toolCallId . "call-1")
-                                              (status . "in_progress")
-                                              (title . "Terminal")
-                                              (kind . "tool")
-                                              (content . [((type . "terminal")
-                                                           (terminalId . ,terminal-id))]))))))))
-      (agent-shell--on-notification
-       :state agent-shell--state
-       :notification `((method . "session/update")
-                       (params . ((update . ((sessionUpdate . "tool_call")
-                                              (toolCallId . "call-2")
-                                              (status . "in_progress")
-                                              (title . "Terminal")
-                                              (kind . "tool")
-                                              (content . [((type . "terminal")
-                                                           (terminalId . ,terminal-id))])))))))))
-    (agent-shell--terminal-handle-output
-     agent-shell--state
-     terminal-id
-     "chunk-1")
-    (should (equal (agent-shell--tool-call-output-text agent-shell--state "call-1")
-                   "chunk-1"))
-    (should (equal (agent-shell--tool-call-output-text agent-shell--state "call-2")
-                   "chunk-1"))
-    (agent-shell--handle-tool-call-update-streaming
-     agent-shell--state
-     `((toolCallId . "call-1")
-       (status . "completed")))
-    (agent-shell--terminal-handle-output
-     agent-shell--state
-     terminal-id
-     "chunk-2")
-    (should (equal (agent-shell--tool-call-output-text agent-shell--state "call-1")
-                   "chunk-1"))
-    (should (equal (agent-shell--tool-call-output-text agent-shell--state "call-2")
-                   "chunk-1chunk-2"))))
+                                           (with-current-buffer buffer
+                                             (agent-shell--on-notification
+                                              :state agent-shell--state
+                                              :notification `((method . "session/update")
+                                                              (params . ((update . ((sessionUpdate . "tool_call")
+                                                                                    (toolCallId . "call-1")
+                                                                                    (status . "in_progress")
+                                                                                    (title . "Terminal")
+                                                                                    (kind . "tool")
+                                                                                    (content . [((type . "terminal")
+                                                                                                 (terminalId . ,terminal-id))]))))))))
+                                           (agent-shell--on-notification
+                                            :state agent-shell--state
+                                            :notification `((method . "session/update")
+                                                            (params . ((update . ((sessionUpdate . "tool_call")
+                                                                                  (toolCallId . "call-2")
+                                                                                  (status . "in_progress")
+                                                                                  (title . "Terminal")
+                                                                                  (kind . "tool")
+                                                                                  (content . [((type . "terminal")
+                                                                                               (terminalId . ,terminal-id))])))))))
+                                           (agent-shell--terminal-handle-output
+                                            agent-shell--state
+                                            terminal-id
+                                            "chunk-1")
+                                           (should (equal (agent-shell--tool-call-output-text agent-shell--state "call-1")
+                                                          "chunk-1"))
+                                           (should (equal (agent-shell--tool-call-output-text agent-shell--state "call-2")
+                                                          "chunk-1"))
+                                           (agent-shell--handle-tool-call-update-streaming
+                                            agent-shell--state
+                                            `((toolCallId . "call-1")
+                                              (status . "completed")))
+                                           (agent-shell--terminal-handle-output
+                                            agent-shell--state
+                                            terminal-id
+                                            "chunk-2")
+                                           (should (equal (agent-shell--tool-call-output-text agent-shell--state "call-1")
+                                                          "chunk-1"))
+                                           (should (equal (agent-shell--tool-call-output-text agent-shell--state "call-2")
+                                                          "chunk-1chunk-2"))))
 
 
 (ert-deftest agent-shell--terminal-final-update-ignores-agent-content-test ()
