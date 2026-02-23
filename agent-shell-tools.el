@@ -160,21 +160,18 @@ INCLUDE-CONTENT and INCLUDE-DIFF control optional fields."
          (agent-shell--tool-call-output-text state tool-call-id))
         (unless has-terminal
           (agent-shell--tool-call-clear-output state tool-call-id))))
-     ;; Non-final meta toolResponse: output in _meta.*.toolResponse
+     ;; Non-final meta toolResponse: accumulate only, render on final.
      ((and meta-response (not final))
       (let ((chunk (agent-shell--tool-call-normalize-output meta-response)))
         (when (and chunk (not (string-empty-p chunk)))
-          (agent-shell--tool-call-append-output-chunk state tool-call-id chunk)
-          (agent-shell--append-tool-call-output state tool-call-id chunk))))
+          (agent-shell--tool-call-append-output-chunk state tool-call-id chunk))))
      (final
-      (let ((already-streamed (map-nested-elt state `(:tool-calls ,tool-call-id :output-chunks))))
-        (agent-shell--handle-tool-call-update
-         state
-         update
-         ;; When output was already streamed to the buffer, pass nil
-         ;; so the final update only refreshes status/title, not body.
-         (unless (or has-terminal already-streamed)
-           (agent-shell--tool-call-content-text (map-elt update 'content)))))
+      (agent-shell--handle-tool-call-update
+       state
+       update
+       (unless has-terminal
+         (or (agent-shell--tool-call-output-text state tool-call-id)
+             (agent-shell--tool-call-content-text (map-elt update 'content)))))
       (unless has-terminal
         (agent-shell--tool-call-clear-output state tool-call-id))))))
 
