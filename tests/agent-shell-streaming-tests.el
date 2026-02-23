@@ -1,0 +1,151 @@
+;;; agent-shell-streaming-tests.el --- Tests for streaming/dedup -*- lexical-binding: t; -*-
+
+(require 'ert)
+(require 'agent-shell)
+(require 'agent-shell-meta)
+
+;;; Code:
+
+(ert-deftest agent-shell--tool-call-meta-response-text-test ()
+  "Extract toolResponse text from meta updates."
+  (let ((update '((_meta . ((agent . ((toolResponse . ((content . "ok"))))))))))
+    (should (equal (agent-shell--tool-call-meta-response-text update) "ok")))
+  (let ((update '((_meta . ((toolResponse . [((type . "text") (text . "one"))
+                                             ((type . "text") (text . "two"))]))))))
+    (should (equal (agent-shell--tool-call-meta-response-text update)
+                   "one\n\ntwo"))))
+
+(ert-deftest agent-shell--tool-call-normalize-output-trailing-newline-test ()
+  "Normalized output should always end with a newline."
+  (should (string-suffix-p "\n" (agent-shell--tool-call-normalize-output "hello")))
+  (should (string-suffix-p "\n" (agent-shell--tool-call-normalize-output "hello\n")))
+  (should (equal (agent-shell--tool-call-normalize-output "") ""))
+  (should (equal (agent-shell--tool-call-normalize-output nil) nil)))
+
+(ert-deftest agent-shell--tool-call-normalize-output-persisted-output-test ()
+  "Persisted-output tags should be stripped and content fontified."
+  (let ((result (agent-shell--tool-call-normalize-output
+                 "<persisted-output>\nOutput saved to: /tmp/foo.txt\n\nPreview:\nline 0\n</persisted-output>")))
+    ;; Tags stripped
+    (should-not (string-match-p "<persisted-output>" result))
+    (should-not (string-match-p "</persisted-output>" result))
+    ;; Content preserved
+    (should (string-match-p "Output saved to" result))
+    (should (string-match-p "line 0" result))
+    ;; Fontified as comment
+    (should (eq (get-text-property 1 'font-lock-face result) 'font-lock-comment-face))))
+
+(ert-deftest agent-shell--tool-call-update-writes-output-test ()
+  "Tool call updates should write output to the shell buffer."
+  (let* ((buffer (get-buffer-create " *agent-shell-tool-call-output*"))
+         (agent-shell--state (agent-shell--make-state :buffer buffer)))
+    (map-put! agent-shell--state :client 'test-client)
+    (map-put! agent-shell--state :request-count 1)
+    (with-current-buffer buffer
+      (erase-buffer)
+      (agent-shell-mode))
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
+                   (lambda (&rest _args) nil)))
+          (with-current-buffer buffer
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :notification `((method . "session/update")
+                             (params . ((update . ((sessionUpdate . "tool_call_update")
+                                                   (toolCallId . "call-1")
+                                                   (status . "completed")
+                                                   (content . [((content . ((text . "stream chunk"))))]))))))))
+          (with-current-buffer buffer
+            (should (string-match-p "stream chunk" (buffer-string)))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest agent-shell--tool-call-meta-response-stdout-no-duplication-test ()
+  "Meta toolResponse.stdout must not produce duplicate output.
+Simplified replay without terminal notifications: sends tool_call
+\(pending), tool_call_update with _meta stdout, then tool_call_update
+\(completed).  A distinctive line must appear exactly once."
+  (let* ((buffer (get-buffer-create " *agent-shell-dedup-test*"))
+         (agent-shell--state (agent-shell--make-state :buffer buffer))
+         (tool-id "toolu_replay_dedup")
+         (stdout-text "line 0\nline 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9"))
+    (map-put! agent-shell--state :client 'test-client)
+    (map-put! agent-shell--state :request-count 1)
+    (with-current-buffer buffer
+      (erase-buffer)
+      (agent-shell-mode))
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
+                   (lambda (&rest _args) nil)))
+          (with-current-buffer buffer
+            ;; Notification 1: tool_call (pending)
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :notification `((method . "session/update")
+                             (params . ((update
+                                         . ((toolCallId . ,tool-id)
+                                            (sessionUpdate . "tool_call")
+                                            (rawInput)
+                                            (status . "pending")
+                                            (title . "Bash")
+                                            (kind . "execute")))))))
+            ;; Notification 2: tool_call_update with toolResponse.stdout
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :notification `((method . "session/update")
+                             (params . ((update
+                                         . ((_meta (claudeCode (toolResponse (stdout . ,stdout-text)
+                                                                             (stderr . "")
+                                                                             (interrupted)
+                                                                             (isImage)
+                                                                             (noOutputExpected))
+                                                               (toolName . "Bash")))
+                                            (toolCallId . ,tool-id)
+                                            (sessionUpdate . "tool_call_update")))))))
+            ;; Notification 3: tool_call_update completed
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :notification `((method . "session/update")
+                             (params . ((update
+                                         . ((toolCallId . ,tool-id)
+                                            (sessionUpdate . "tool_call_update")
+                                            (status . "completed")))))))))
+          (with-current-buffer buffer
+            (let* ((buf-text (buffer-substring-no-properties (point-min) (point-max)))
+                   (count-line5 (let ((c 0) (s 0))
+                                  (while (string-match "line 5" buf-text s)
+                                    (setq c (1+ c) s (match-end 0)))
+                                  c)))
+              ;; "line 9" must be present (output was rendered)
+              (should (string-match-p "line 9" buf-text))
+              ;; "line 5" must appear exactly once (no duplication)
+              (should (= count-line5 1))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest agent-shell--initialize-request-includes-terminal-output-meta-test ()
+  "Initialize request should include terminal_output meta capability.
+Without this, agents like claude-agent-acp will not send
+toolResponse.stdout streaming updates."
+  (let* ((buffer (get-buffer-create " *agent-shell-init-request*"))
+         (agent-shell--state (agent-shell--make-state :buffer buffer)))
+    (map-put! agent-shell--state :client 'test-client)
+    (with-current-buffer buffer
+      (erase-buffer)
+      (agent-shell-mode)
+      (setq-local agent-shell--state agent-shell--state))
+    (unwind-protect
+        (let ((captured-request nil))
+          (cl-letf (((symbol-function 'acp-send-request)
+                     (lambda (&rest args)
+                       (setq captured-request (plist-get args :request)))))
+            (agent-shell--initiate-handshake
+             :shell-buffer buffer
+             :on-initiated (lambda () nil)))
+          (should (eq t (map-nested-elt captured-request
+                                        '(:params clientCapabilities _meta terminal_output)))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(provide 'agent-shell-streaming-tests)
+;;; agent-shell-streaming-tests.el ends here
