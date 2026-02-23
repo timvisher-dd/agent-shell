@@ -115,6 +115,25 @@ A vector of text items:
         (when parts
           (mapconcat #'identity parts "\n\n")))))))
 
+(defun agent-shell--tool-call-terminal-output-data (update)
+  "Return terminal output data string from UPDATE meta, if present.
+Extracts the data field from _meta.terminal_output, used by agents
+like codex-acp for incremental streaming.
+
+For example:
+
+  (agent-shell--tool-call-terminal-output-data
+   \\='((_meta . ((terminal_output . ((data . \"hello\")))))))
+    => \"hello\""
+  (when-let* ((meta (or (map-elt update '_meta)
+                        (map-elt update 'meta)))
+              (terminal (or (agent-shell--meta-lookup meta 'terminal_output)
+                            (agent-shell--meta-lookup meta 'terminal-output))))
+    (let ((data (or (agent-shell--meta-lookup terminal 'data)
+                    (agent-shell--meta-lookup terminal "data"))))
+      (when (stringp data)
+        data))))
+
 (provide 'agent-shell-meta)
 
 ;;; agent-shell-meta.el ends here
