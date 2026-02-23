@@ -271,11 +271,13 @@ INCLUDE-CONTENT and INCLUDE-DIFF control optional fields."
 
 (defun agent-shell--handle-tool-call-update-streaming (state update)
   "Stream tool call UPDATE in STATE with dedup.
-Two cond branches:
-  1. Non-final meta-response: accumulate only, no buffer write.
-  2. Final: render accumulated output or fallback to content-text."
+Three cond branches:
+  1. Terminal output data: accumulate and stream to buffer live.
+  2. Non-final meta-response: accumulate only, no buffer write.
+  3. Final: render accumulated output or fallback to content-text."
   (let* ((tool-call-id (map-elt update 'toolCallId))
          (status (map-elt update 'status))
+         (terminal-data (agent-shell--tool-call-terminal-output-data update))
          (meta-response (agent-shell--tool-call-meta-response-text update))
          (final (agent-shell--tool-call-final-p status)))
     (agent-shell--save-tool-call
@@ -283,6 +285,20 @@ Two cond branches:
      tool-call-id
      (agent-shell--tool-call-update-overrides state update nil nil))
     (cond
+     ;; Terminal output data (e.g. codex-acp): accumulate and stream live.
+     ((and terminal-data (stringp terminal-data))
+      (let* ((already-has-output (map-nested-elt state `(:tool-calls ,tool-call-id :output-chunks)))
+             (chunk (agent-shell--tool-call-normalize-output terminal-data)))
+        (when (and chunk (not (string-empty-p chunk)))
+          ;; Skip when meta-response already provided the full output
+          ;; (claude-agent-acp sends the same data in both paths).
+          (unless already-has-output
+            (agent-shell--tool-call-append-output-chunk state tool-call-id chunk)
+            (unless final
+              (agent-shell--append-tool-call-output state tool-call-id chunk)))))
+      (when final
+        (agent-shell--handle-tool-call-final state update)
+        (agent-shell--tool-call-clear-output state tool-call-id)))
      ;; Non-final meta toolResponse: accumulate only, render on final.
      ((and meta-response (not final))
       (let ((chunk (agent-shell--tool-call-normalize-output meta-response)))
