@@ -1564,63 +1564,7 @@ COMMAND, when present, may be a shell command string or an argv vector."
               :event 'tool-call-update
               :data (list (cons :tool-call-id (map-nested-elt acp-notification '(params update toolCallId)))
                           (cons :tool-call (map-nested-elt state `(:tool-calls ,(map-nested-elt acp-notification '(params update toolCallId)))))))
-             (let* ((diff (map-nested-elt state `(:tool-calls ,(map-nested-elt acp-notification '(params update toolCallId)) :diff)))
-                    (output (concat
-                             "\n\n"
-                             ;; TODO: Consider if there are other
-                             ;; types of content to display.
-                             (mapconcat (lambda (item)
-                                          (map-nested-elt item '(content text)))
-                                        (map-nested-elt acp-notification '(params update content))
-                                        "\n\n")
-                             "\n\n"))
-                    (diff-text (agent-shell--format-diff-as-text diff))
-                    (body-text (if diff-text
-                                   (concat output
-                                           "\n\n"
-                                           "╭─────────╮\n"
-                                           "│ changes │\n"
-                                           "╰─────────╯\n\n" diff-text)
-                                 output)))
-               ;; Log tool call to transcript when completed or failed
-               (when (and (map-nested-elt acp-notification '(params update status))
-                          (member (map-nested-elt acp-notification '(params update status)) '("completed" "failed")))
-                 (agent-shell--append-transcript
-                  :text (agent-shell--make-transcript-tool-call-entry
-                         :status (map-nested-elt acp-notification '(params update status))
-                         :title (map-nested-elt state `(:tool-calls ,(map-nested-elt acp-notification '(params update toolCallId)) :title))
-                         :kind (map-nested-elt state `(:tool-calls ,(map-nested-elt acp-notification '(params update toolCallId)) :kind))
-                         :description (map-nested-elt state `(:tool-calls ,(map-nested-elt acp-notification '(params update toolCallId)) :description))
-                         :command (map-nested-elt state `(:tool-calls ,(map-nested-elt acp-notification '(params update toolCallId)) :command))
-                         :parameters (agent-shell--extract-tool-parameters
-                                      (map-nested-elt state `(:tool-calls ,(map-nested-elt acp-notification '(params update toolCallId)) :raw-input)))
-                         :output body-text)
-                  :file-path agent-shell--transcript-file))
-               ;; Hide permission after sending response.
-               ;; Status is completed or failed so the user
-               ;; likely selected one of: accepted/rejected/always.
-               ;; Remove stale permission dialog.
-               (when (member (map-nested-elt acp-notification '(params update status))
-                             '("completed" "failed"))
-                 ;; block-id must be the same as the one used as
-                 ;; agent-shell--update-fragment param by "session/request_permission".
-                 (agent-shell--delete-fragment :state state :block-id (format "permission-%s" (map-nested-elt acp-notification '(params update toolCallId)))))
-               (let* ((tool-call-labels (agent-shell-make-tool-call-label state (map-nested-elt acp-notification '(params update toolCallId))))
-                      (saved-command (map-nested-elt state `(:tool-calls
-                                                             ,(map-nested-elt acp-notification '(params update toolCallId))
-                                                             :command)))
-                      ;; Prepend fenced command to body.
-                      (command-block (when saved-command
-                                      (concat "```console\n" saved-command "\n```"))))
-                 (agent-shell--update-fragment
-                  :state state
-                  :block-id (map-nested-elt acp-notification '(params update toolCallId))
-                  :label-left (map-elt tool-call-labels :status)
-                  :label-right (map-elt tool-call-labels :title)
-                  :body (if command-block
-                            (concat command-block "\n\n" (string-trim body-text))
-                          (string-trim body-text))
-                  :expanded agent-shell-tool-use-expand-by-default)))
+             (agent-shell--handle-tool-call-update-streaming state (map-nested-elt acp-notification '(params update)))
              (map-put! state :last-entry-type "tool_call_update")))
           ((equal (map-nested-elt acp-notification '(params update sessionUpdate)) "available_commands_update")
            (map-put! state :available-commands (map-nested-elt acp-notification '(params update availableCommands)))
@@ -3663,7 +3607,8 @@ Must provide ON-INITIATED (lambda ())."
                             (title . "Emacs Agent Shell")
                             (version . ,agent-shell--version))
              :read-text-file-capability agent-shell-text-file-capabilities
-             :write-text-file-capability agent-shell-text-file-capabilities)
+             :write-text-file-capability agent-shell-text-file-capabilities
+             :meta-capabilities '((terminal_output . t)))
    :on-success (lambda (acp-response)
                  (with-current-buffer shell-buffer
                    (let ((acp-session-capabilities (or (map-elt acp-response 'sessionCapabilities)
