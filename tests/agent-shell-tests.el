@@ -1477,6 +1477,61 @@ code block content
             (should (string-match-p "stream chunk" (buffer-string)))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
+(ert-deftest agent-shell--tool-call-meta-response-stdout-no-duplication-test ()
+  "Meta-response stdout should not be duplicated in the buffer."
+  (let* ((buffer (get-buffer-create " *agent-shell-dedup-test*"))
+         (agent-shell--state (agent-shell--make-state :buffer buffer))
+         (tool-id "toolu_test_dedup"))
+    (map-put! agent-shell--state :client 'test-client)
+    (map-put! agent-shell--state :request-count 1)
+    (with-current-buffer buffer
+      (erase-buffer)
+      (agent-shell-mode))
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
+                   (lambda (&rest _args) nil)))
+          (with-current-buffer buffer
+            ;; Update 1: non-final with toolResponse.stdout (the full output)
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :notification `((method . "session/update")
+                             (params . ((update . ((sessionUpdate . "tool_call_update")
+                                                   (toolCallId . ,tool-id)
+                                                   (_meta . ((claudeCode . ((toolResponse . ((stdout . "line 0\nline 1\nline 2\n")
+                                                                                             (stderr . "")))
+                                                                            (toolName . "Bash")))))))))))
+            ;; Update 2: non-final with terminal_output.data (preview)
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :notification `((method . "session/update")
+                             (params . ((update . ((sessionUpdate . "tool_call_update")
+                                                   (toolCallId . ,tool-id)
+                                                   (_meta . ((terminal_output . ((terminal_id . ,tool-id)
+                                                                                 (data . "preview line 0\n")))))))))))
+            ;; Update 3: final with status completed
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :notification `((method . "session/update")
+                             (params . ((update . ((sessionUpdate . "tool_call_update")
+                                                   (toolCallId . ,tool-id)
+                                                   (status . "completed")
+                                                   (_meta . ((claudeCode . ((toolName . "Bash")))
+                                                             (terminal_exit . ((terminal_id . ,tool-id)
+                                                                               (exit_code . 0)))))
+                                                   (content . [((content . ((text . "Done."))))]))))))))
+          ;; Count occurrences of "line 0" in the buffer
+          (with-current-buffer buffer
+            (let ((count 0))
+              (save-excursion
+                (goto-char (point-min))
+                (while (search-forward "line 0\n" nil t)
+                  (setq count (1+ count))))
+              ;; "line 0" should appear at most twice: once from stdout, once from preview.
+              ;; It should NOT appear 3+ times (which would indicate duplication).
+              (should (< count 3)))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 (ert-deftest agent-shell--tool-call-normalize-output-trailing-newline-test ()
   "Normalized output should always end with a newline."
   (should (string-suffix-p "\n" (agent-shell--tool-call-normalize-output "hello")))
