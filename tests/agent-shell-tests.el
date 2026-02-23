@@ -1478,10 +1478,12 @@ code block content
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 (ert-deftest agent-shell--tool-call-meta-response-stdout-no-duplication-test ()
-  "Meta-response stdout should not be duplicated in the buffer."
+  "Meta-response stdout should appear exactly once in the buffer."
   (let* ((buffer (get-buffer-create " *agent-shell-dedup-test*"))
          (agent-shell--state (agent-shell--make-state :buffer buffer))
-         (tool-id "toolu_test_dedup"))
+         (tool-id "toolu_test_dedup")
+         (stdout-text (mapconcat (lambda (i) (format "line %d" i))
+                                 (number-sequence 0 9) "\n")))
     (map-put! agent-shell--state :client 'test-client)
     (map-put! agent-shell--state :request-count 1)
     (with-current-buffer buffer
@@ -1491,23 +1493,25 @@ code block content
         (cl-letf (((symbol-function 'agent-shell--make-diff-info)
                    (lambda (&rest _args) nil)))
           (with-current-buffer buffer
-            ;; Update 1: non-final with toolResponse.stdout (the full output)
+            ;; Update 1: non-final with toolResponse.stdout (10 lines)
             (agent-shell--on-notification
              :state agent-shell--state
              :notification `((method . "session/update")
                              (params . ((update . ((sessionUpdate . "tool_call_update")
                                                    (toolCallId . ,tool-id)
-                                                   (_meta . ((claudeCode . ((toolResponse . ((stdout . "line 0\nline 1\nline 2\n")
-                                                                                             (stderr . "")))
+                                                   (_meta . ((claudeCode . ((toolResponse
+                                                                             . ((stdout . ,stdout-text)
+                                                                                (stderr . "")))
                                                                             (toolName . "Bash")))))))))))
-            ;; Update 2: non-final with terminal_output.data (preview)
+            ;; Update 2: non-final with terminal_output.data (preview: first 3 lines)
             (agent-shell--on-notification
              :state agent-shell--state
              :notification `((method . "session/update")
                              (params . ((update . ((sessionUpdate . "tool_call_update")
                                                    (toolCallId . ,tool-id)
-                                                   (_meta . ((terminal_output . ((terminal_id . ,tool-id)
-                                                                                 (data . "preview line 0\n")))))))))))
+                                                   (_meta . ((terminal_output
+                                                              . ((terminal_id . ,tool-id)
+                                                                 (data . "line 0\nline 1\nline 2\n")))))))))))
             ;; Update 3: final with status completed
             (agent-shell--on-notification
              :state agent-shell--state
@@ -1516,19 +1520,21 @@ code block content
                                                    (toolCallId . ,tool-id)
                                                    (status . "completed")
                                                    (_meta . ((claudeCode . ((toolName . "Bash")))
-                                                             (terminal_exit . ((terminal_id . ,tool-id)
-                                                                               (exit_code . 0)))))
+                                                             (terminal_exit
+                                                              . ((terminal_id . ,tool-id)
+                                                                 (exit_code . 0)))))
                                                    (content . [((content . ((text . "Done."))))]))))))))
-          ;; Count occurrences of "line 0" in the buffer
           (with-current-buffer buffer
-            (let ((count 0))
-              (save-excursion
-                (goto-char (point-min))
-                (while (search-forward "line 0\n" nil t)
-                  (setq count (1+ count))))
-              ;; "line 0" should appear at most twice: once from stdout, once from preview.
-              ;; It should NOT appear 3+ times (which would indicate duplication).
-              (should (< count 3)))))
+            (let* ((buf-text (buffer-substring-no-properties (point-min) (point-max)))
+                   (count-line5 (let ((c 0) (s 0))
+                                  (while (string-match "line 5" buf-text s)
+                                    (setq c (1+ c) s (match-end 0)))
+                                  c)))
+              ;; "line 9" should be present (full stdout rendered)
+              (should (string-match-p "line 9" buf-text))
+              ;; "line 5" is only in stdout (not in the 3-line preview),
+              ;; so it must appear exactly once.
+              (should (= count-line5 1)))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
