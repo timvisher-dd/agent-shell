@@ -3751,7 +3751,7 @@ Falls back to latest session in batch mode (e.g. tests)."
                                                                    (agent-shell--make-status-kind-label :status "completed")
                                                                    (propertize "Resuming session" 'font-lock-face 'font-lock-doc-markup-face))
                                                :expanded t
-                                               :body (or (map-elt acp-selected-session 'title) ""))
+                                               :body (or (map-elt acp-session 'title) ""))
                                               (agent-shell--finalize-session-init :on-session-init on-session-init))
                                 :on-failure (lambda (_acp-error _raw-message)
                                               (agent-shell--update-fragment
