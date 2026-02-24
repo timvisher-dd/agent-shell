@@ -1,78 +1,3 @@
-(ert-deftest agent-shell--codex-terminal-output-streams-without-duplication-test ()
-"Codex-acp streams via terminal_output.data; output must not duplicate.
-Replays the codex notification pattern: tool_call with terminal content,
-incremental terminal_output.data chunks, then completed update."
-(let* ((buffer (get-buffer-create " *agent-shell-codex-dedup*"))
-(agent-shell--state (agent-shell--make-state :buffer buffer))
-(tool-id "call_codex_test"))
-(map-put! agent-shell--state :client 'test-client)
-(map-put! agent-shell--state :request-count 1)
-(with-current-buffer buffer
-(erase-buffer)
-(agent-shell-mode))
-(unwind-protect
-(cl-letf (((symbol-function 'agent-shell--make-diff-info)
-(lambda (&rest _args) nil)))
-(with-current-buffer buffer
-;; Notification 1: tool_call (in_progress, terminal content)
-(agent-shell--on-notification
-:state agent-shell--state
-:notification `((method . "session/update")
-(params . ((update
-. ((sessionUpdate . "tool_call")
-(toolCallId . ,tool-id)
-(title . "Run echo test")
-(kind . "execute")
-(status . "in_progress")
-(content . [((type . "terminal")
-(terminalId . ,tool-id))])
-(_meta (terminal_info
-(terminal_id . ,tool-id)))))))))
-;; Notification 2: first terminal_output.data chunk
-(agent-shell--on-notification
-:state agent-shell--state
-:notification `((method . "session/update")
-(params . ((update
-. ((sessionUpdate . "tool_call_update")
-(toolCallId . ,tool-id)
-(_meta (terminal_output
-(terminal_id . ,tool-id)
-(data . "alpha\n")))))))))
-;; Notification 3: second terminal_output.data chunk
-(agent-shell--on-notification
-:state agent-shell--state
-:notification `((method . "session/update")
-(params . ((update
-. ((sessionUpdate . "tool_call_update")
-(toolCallId . ,tool-id)
-(_meta (terminal_output
-(terminal_id . ,tool-id)
-(data . "bravo\n")))))))))
-;; Notification 4: completed
-(agent-shell--on-notification
-:state agent-shell--state
-:notification `((method . "session/update")
-(params . ((update
-. ((sessionUpdate . "tool_call_update")
-(toolCallId . ,tool-id)
-(status . "completed")
-(_meta (terminal_exit
-(terminal_id . ,tool-id)
-(exit_code . 0)))))))))))
-(with-current-buffer buffer
-(let* ((buf-text (buffer-substring-no-properties (point-min) (point-max)))
-(count-alpha (let ((c 0) (s 0))
-(while (string-match "alpha" buf-text s)
-(setq c (1+ c) s (match-end 0)))
-c)))
-;; Both chunks rendered
-(should (string-match-p "alpha" buf-text))
-(should (string-match-p "bravo" buf-text))
-;; No duplication
-(should (= count-alpha 1))))
-(when (buffer-live-p buffer)
-(kill-buffer buffer)))))
-
 ;;; agent-shell-streaming-tests.el --- Tests for streaming/dedup -*- lexical-binding: t; -*-
 
 (require 'ert)
@@ -221,6 +146,82 @@ toolResponse.stdout streaming updates."
                                         '(:params clientCapabilities _meta terminal_output)))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
+
+(ert-deftest agent-shell--codex-terminal-output-streams-without-duplication-test ()
+"Codex-acp streams via terminal_output.data; output must not duplicate.
+Replays the codex notification pattern: tool_call with terminal content,
+incremental terminal_output.data chunks, then completed update."
+(let* ((buffer (get-buffer-create " *agent-shell-codex-dedup*"))
+(agent-shell--state (agent-shell--make-state :buffer buffer))
+(tool-id "call_codex_test"))
+(map-put! agent-shell--state :client 'test-client)
+(map-put! agent-shell--state :request-count 1)
+(with-current-buffer buffer
+(erase-buffer)
+(agent-shell-mode))
+(unwind-protect
+(cl-letf (((symbol-function 'agent-shell--make-diff-info)
+(lambda (&rest _args) nil)))
+(with-current-buffer buffer
+;; Notification 1: tool_call (in_progress, terminal content)
+(agent-shell--on-notification
+:state agent-shell--state
+:notification `((method . "session/update")
+(params . ((update
+. ((sessionUpdate . "tool_call")
+(toolCallId . ,tool-id)
+(title . "Run echo test")
+(kind . "execute")
+(status . "in_progress")
+(content . [((type . "terminal")
+(terminalId . ,tool-id))])
+(_meta (terminal_info
+(terminal_id . ,tool-id)))))))))
+;; Notification 2: first terminal_output.data chunk
+(agent-shell--on-notification
+:state agent-shell--state
+:notification `((method . "session/update")
+(params . ((update
+. ((sessionUpdate . "tool_call_update")
+(toolCallId . ,tool-id)
+(_meta (terminal_output
+(terminal_id . ,tool-id)
+(data . "alpha\n")))))))))
+;; Notification 3: second terminal_output.data chunk
+(agent-shell--on-notification
+:state agent-shell--state
+:notification `((method . "session/update")
+(params . ((update
+. ((sessionUpdate . "tool_call_update")
+(toolCallId . ,tool-id)
+(_meta (terminal_output
+(terminal_id . ,tool-id)
+(data . "bravo\n")))))))))
+;; Notification 4: completed
+(agent-shell--on-notification
+:state agent-shell--state
+:notification `((method . "session/update")
+(params . ((update
+. ((sessionUpdate . "tool_call_update")
+(toolCallId . ,tool-id)
+(status . "completed")
+(_meta (terminal_exit
+(terminal_id . ,tool-id)
+(exit_code . 0)))))))))))
+(with-current-buffer buffer
+(let* ((buf-text (buffer-substring-no-properties (point-min) (point-max)))
+(count-alpha (let ((c 0) (s 0))
+(while (string-match "alpha" buf-text s)
+(setq c (1+ c) s (match-end 0)))
+c)))
+;; Both chunks rendered
+(should (string-match-p "alpha" buf-text))
+(should (string-match-p "bravo" buf-text))
+;; No duplication
+(should (= count-alpha 1))))
+(when (buffer-live-p buffer)
+  (kill-buffer buffer)))))
+
 
 (provide 'agent-shell-streaming-tests)
 ;;; agent-shell-streaming-tests.el ends here

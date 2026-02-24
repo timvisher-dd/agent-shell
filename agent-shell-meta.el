@@ -66,8 +66,7 @@ For example:
                for value = (cond
                             ((and (consp entry) (consp (cdr entry)))
                              (agent-shell--meta-lookup (cdr entry) 'toolResponse))
-                            ((and (consp entry) (listp (cdr entry)))
-                             (agent-shell--meta-lookup (cdr entry) 'toolResponse)))
+			    )
                when value return value)))))
 
 (defun agent-shell--tool-call-meta-response-text (update)
@@ -129,8 +128,7 @@ For example:
                         (map-elt update 'meta)))
               (terminal (or (agent-shell--meta-lookup meta 'terminal_output)
                             (agent-shell--meta-lookup meta 'terminal-output))))
-    (let ((data (or (agent-shell--meta-lookup terminal 'data)
-                    (agent-shell--meta-lookup terminal "data"))))
+    (let ((data (agent-shell--meta-lookup terminal 'data)))
       (when (stringp data)
         data))))
 
