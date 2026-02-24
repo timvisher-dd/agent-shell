@@ -35,6 +35,7 @@
 (autoload 'agent-shell-make-agent-config "agent-shell")
 (declare-function agent-shell--make-acp-client "agent-shell")
 (declare-function agent-shell--dwim "agent-shell")
+(declare-function agent-shell-resume-session "agent-shell")
 
 (defcustom agent-shell-cursor-acp-command
   '("cursor-agent-acp")
@@ -74,6 +75,11 @@ Returns an agent configuration alist using `agent-shell-make-agent-config'."
   (interactive)
   (agent-shell--dwim :config (agent-shell-cursor-make-agent-config)
                      :new-shell t))
+
+(defun agent-shell-cursor-resume-session ()
+  "Resume a Cursor agent session."
+  (interactive)
+  (agent-shell-resume-session :config (agent-shell-cursor-make-agent-config)))
 
 (cl-defun agent-shell-cursor-make-client (&key buffer)
   "Create a Cursor agent ACP client with BUFFER as context."

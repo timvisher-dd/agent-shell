@@ -802,8 +802,10 @@ Returns an empty string if no icon should be displayed."
         (buffer-string))
     ""))
 
-(cl-defun agent-shell-select-config (&key prompt)
-  "Display PROMPT to select an agent config from `agent-shell-agent-configs'."
+(cl-defun agent-shell-select-config (&key prompt default-config)
+  "Display PROMPT to select an agent config from `agent-shell-agent-configs'.
+
+When DEFAULT-CONFIG is non-nil, use it as the default selection."
   (let* ((configs agent-shell-agent-configs)
          (choices (mapcar (lambda (config)
                             (let ((display-name (or (map-elt config :mode-line-name)
@@ -814,7 +816,13 @@ Returns an empty string if no icon should be displayed."
                               (cons (concat icon (when icon " ") display-name)
                                     config)))
                           configs))
-         (selected-name (completing-read (or prompt "Select agent: ") choices nil t)))
+         (default-choice (when default-config
+                           (car (seq-find (lambda (choice)
+                                            (equal (cdr choice) default-config))
+                                          choices))))
+         (selected-name (completing-read (or prompt "Select agent: ")
+                                         choices nil t nil nil
+                                         default-choice)))
     (map-elt choices selected-name)))
 
 (defun agent-shell-buffers ()
@@ -833,6 +841,42 @@ Includes shells accessed via viewport buffers, preserving visited order."
             (push shell-buffer seen)
             (push shell-buffer shell-buffers)))))
     (nreverse shell-buffers)))
+
+(defun agent-shell--config-for-shell (shell-buffer)
+  "Return agent config for SHELL-BUFFER."
+  (when shell-buffer
+    (with-current-buffer shell-buffer
+      (when (derived-mode-p 'agent-shell-mode)
+        (map-elt (agent-shell--state) :agent-config)))))
+
+(defun agent-shell--shell-buffer-for-config (config)
+  "Return most recent shell buffer matching CONFIG."
+  (when config
+    (let ((identifier (map-elt config :identifier)))
+      (seq-find (lambda (shell-buffer)
+                  (with-current-buffer shell-buffer
+                    (let ((shell-config (map-elt (agent-shell--state) :agent-config)))
+                      (if identifier
+                          (eq (map-elt shell-config :identifier) identifier)
+                        (equal shell-config config)))))
+                (agent-shell-buffers)))))
+
+(defun agent-shell--resolve-resume-config ()
+  "Resolve agent config for `agent-shell-resume-session'."
+  (or (agent-shell--resolve-preferred-config)
+      (let* ((active-shell (or (agent-shell--current-shell)
+                               (seq-first (agent-shell-buffers))))
+             (default-config (agent-shell--config-for-shell active-shell)))
+        (agent-shell-select-config
+         :prompt "Resume agent: "
+         :default-config default-config))))
+
+(cl-defun agent-shell--start-resume-shell (&key config)
+  "Start a shell for CONFIG without bootstrapping sessions."
+  (unless config
+    (error "Missing required argument: :config"))
+  (let ((agent-shell-session-strategy 'new-deferred))
+    (agent-shell--start :config config :no-focus t :new-session t)))
 
 (defun agent-shell-other-buffer ()
   "Switch to other associated buffer (viewport vs shell)."
@@ -887,6 +931,29 @@ When FORCE is non-nil, skip confirmation prompt."
         (t
          (agent-shell--shutdown)
          (call-interactively #'shell-maker-interrupt))))
+
+;;;###autoload
+(cl-defun agent-shell-resume-session (&key config)
+  "Select and resume a prior ACP session for CONFIG.
+
+When CONFIG is nil, prefer `agent-shell-preferred-agent-config'.
+Otherwise, prompt for agent selection (defaulting to the most recent shell).
+
+Example:
+
+  (agent-shell-resume-session)"
+  (interactive)
+  (let* ((selected-config (or config (agent-shell--resolve-resume-config)))
+         (shell-buffer (or (agent-shell--shell-buffer-for-config selected-config)
+                           (agent-shell--start-resume-shell :config selected-config))))
+    (with-current-buffer shell-buffer
+      (when (shell-maker-busy)
+        (user-error "Busy, try later"))
+      (agent-shell--ensure-session-management
+       :shell-buffer shell-buffer
+       :on-ready (lambda ()
+                   (agent-shell--resume-session-from-list
+                    :shell-buffer shell-buffer))))))
 
 (cl-defun agent-shell--make-shell-maker-config (&key prompt prompt-regexp)
   "Create `shell-maker' configuration with PROMPT and PROMPT-REGEXP."
@@ -1081,6 +1148,58 @@ Flow:
            ;; Send ACP prompt request
            (when (and command (not (string-empty-p (string-trim command))))
              (agent-shell--send-command :prompt command :shell-buffer shell-buffer))))))
+
+(cl-defun agent-shell--ensure-session-management (&key shell-buffer on-ready)
+  "Ensure session management prerequisites are ready in SHELL-BUFFER.
+
+Calls ON-READY once ACP client, subscriptions, handshake, and authentication
+are complete.
+
+Example:
+
+  (agent-shell--ensure-session-management
+   :shell-buffer (current-buffer)
+   :on-ready (lambda () (message \"ready\")))"
+  (unless on-ready
+    (error "Missing required argument: :on-ready"))
+  (with-current-buffer shell-buffer
+    (unless (derived-mode-p 'agent-shell-mode)
+      (error "Not in a shell"))
+    (cond
+     ((not (map-elt (agent-shell--state) :client))
+      (agent-shell--emit-event :event 'init-started)
+      (when (agent-shell--initialize-client)
+        (agent-shell--ensure-session-management
+         :shell-buffer shell-buffer
+         :on-ready on-ready)))
+     ((or (not (map-nested-elt (agent-shell--state) '(:client :request-handlers)))
+          (not (map-nested-elt (agent-shell--state) '(:client :notification-handlers)))
+          (not (map-nested-elt (agent-shell--state) '(:client :error-handlers))))
+      (when (agent-shell--initialize-subscriptions)
+        (agent-shell--ensure-session-management
+         :shell-buffer shell-buffer
+         :on-ready on-ready)))
+     ((not (map-elt (agent-shell--state) :initialized))
+      (agent-shell--initiate-handshake
+       :shell-buffer shell-buffer
+       :on-initiated (lambda ()
+                       (with-current-buffer shell-buffer
+                         (map-put! (agent-shell--state) :initialized t)
+                         (agent-shell--ensure-session-management
+                          :shell-buffer shell-buffer
+                          :on-ready on-ready)))))
+     ((and (map-elt (agent-shell--state) :needs-authentication)
+           (not (map-elt (agent-shell--state) :authenticated)))
+      (agent-shell--authenticate
+       :shell-buffer shell-buffer
+       :on-authenticated (lambda ()
+                           (with-current-buffer shell-buffer
+                             (map-put! (agent-shell--state) :authenticated t)
+                             (agent-shell--ensure-session-management
+                              :shell-buffer shell-buffer
+                              :on-ready on-ready)))))
+     (t
+      (funcall on-ready)))))
 
 (cl-defun agent-shell--on-error (&key state error)
   "Handle ERROR with SHELL an STATE."
@@ -3492,6 +3611,43 @@ Falls back to latest session in batch mode (e.g. tests)."
                 :other-shell)
             (map-elt session-choices selection)))))))
 
+(defun agent-shell--prompt-select-existing-session (acp-sessions)
+  "Prompt to choose an existing session from ACP-SESSIONS.
+
+Returns selected session alist. Falls back to latest session in batch mode.
+
+Example:
+
+  (agent-shell--prompt-select-existing-session
+   \='(((sessionId . \"session-1\")
+       (title . \"Scratch\")
+       (cwd . \"/tmp\"))))
+  ;; => ((sessionId . \"session-1\") ...)"
+  (when acp-sessions
+    (if noninteractive
+        (car acp-sessions)
+      (let* ((max-dir-width (apply #'max (mapcar (lambda (session)
+                                                   (length (agent-shell--session-dir-name session)))
+                                                 acp-sessions)))
+             (max-title-width (apply #'max (mapcar (lambda (session)
+                                                     (length (agent-shell--session-title session)))
+                                                   acp-sessions)))
+             (choices (mapcar (lambda (acp-session)
+                                (cons (agent-shell--session-choice-label acp-session
+                                                                         max-dir-width
+                                                                         max-title-width)
+                                      acp-session))
+                              acp-sessions))
+             (candidates (mapcar #'car choices))
+             ;; Some completion frameworks yielded appended (nil) to each line
+             ;; unless this-command was bound.
+             (this-command 'agent-shell))
+        (agent-shell--emit-event :event 'session-prompt)
+        (let ((selection (completing-read "Resume session: "
+                                          candidates
+                                          nil t)))
+          (map-elt choices selection))))))
+
 
 (cl-defun agent-shell--set-session-from-response (&key acp-response acp-session-id)
   "Set active session state from ACP-RESPONSE and ACP-SESSION-ID."
@@ -3688,6 +3844,119 @@ Falls back to latest session in batch mode (e.g. tests)."
                  (agent-shell--initiate-new-session
                   :shell-buffer shell-buffer
                   :on-session-init on-session-init))))
+
+(cl-defun agent-shell--resume-session (&key shell-buffer acp-session)
+  "Resume ACP-SESSION in SHELL-BUFFER.
+
+Example:
+
+  (agent-shell--resume-session
+   :shell-buffer (current-buffer)
+   :acp-session \='((sessionId . \"session-1\")))"
+  (unless shell-buffer
+    (error "Missing required argument: :shell-buffer"))
+  (unless acp-session
+    (error "Missing required argument: :acp-session"))
+  (with-current-buffer shell-buffer
+    (unless (derived-mode-p 'agent-shell-mode)
+      (error "Not in a shell"))
+    (let ((session-id (map-elt acp-session 'sessionId))
+          (supports-resume (map-elt (agent-shell--state) :supports-session-resume))
+          (supports-load (map-elt (agent-shell--state) :supports-session-load)))
+      (unless session-id
+        (user-error "Selected session missing sessionId"))
+      (unless (or supports-resume supports-load)
+        (user-error "Agent does not support session resume or load"))
+      (acp-send-request
+       :client (map-elt (agent-shell--state) :client)
+       :request (let ((cwd (agent-shell--resolve-path (agent-shell-cwd)))
+                      (mcp-servers (agent-shell--mcp-servers)))
+                  (if supports-resume
+                      (acp-make-session-resume-request
+                       :session-id session-id
+                       :cwd cwd
+                       :mcp-servers mcp-servers)
+                    (acp-make-session-load-request
+                     :session-id session-id
+                     :cwd cwd
+                     :mcp-servers mcp-servers)))
+       :buffer shell-buffer
+       :on-success (lambda (acp-response)
+                     (agent-shell--set-session-from-response
+                      :acp-response acp-response
+                      :acp-session-id session-id)
+                     (map-put! (agent-shell--state) :set-model nil)
+                     (map-put! (agent-shell--state) :set-session-mode nil)
+                     (map-put! (agent-shell--state) :tool-calls nil)
+                     (agent-shell--update-header-and-mode-line)
+                     (when-let ((viewport-buffer (agent-shell-viewport--buffer
+                                                  :shell-buffer shell-buffer
+                                                  :existing-only t)))
+                       (with-current-buffer viewport-buffer
+                         (agent-shell-viewport--update-header)))
+                     (agent-shell--update-fragment
+                      :state (agent-shell--state)
+                      :block-id "resumed_session"
+                     :label-left (format "%s %s"
+                                         (agent-shell--make-status-kind-label :status "completed")
+                                         (propertize "Resumed session" 'font-lock-face 'font-lock-doc-markup-face))
+                     :expanded t
+                     :body (or (map-elt acp-session 'title) ""))
+                     (unless noninteractive
+                       (let ((viewport-buffer (agent-shell-viewport--buffer
+                                               :shell-buffer shell-buffer
+                                               :existing-only t)))
+                         (unless (or (get-buffer-window shell-buffer)
+                                     (and viewport-buffer
+                                          (get-buffer-window viewport-buffer)))
+                           (if agent-shell-prefer-viewport-interaction
+                               (agent-shell-viewport--show-buffer :shell-buffer shell-buffer)
+                             (agent-shell--display-buffer shell-buffer)))))
+                     (agent-shell--emit-event :event 'init-session)
+                     (message "Resumed session %s" session-id))
+       :on-failure (agent-shell--make-error-handler
+                    :state (agent-shell--state) :shell-buffer shell-buffer)))))
+
+(cl-defun agent-shell--resume-session-from-list (&key shell-buffer)
+  "Prompt for and resume a prior session in SHELL-BUFFER.
+
+Example:
+
+  (agent-shell--resume-session-from-list :shell-buffer (current-buffer))"
+  (unless shell-buffer
+    (error "Missing required argument: :shell-buffer"))
+  (with-current-buffer shell-buffer
+    (unless (derived-mode-p 'agent-shell-mode)
+      (error "Not in a shell"))
+    (unless (map-elt (agent-shell--state) :supports-session-list)
+      (user-error "Agent does not support session listing"))
+    (unless (or (map-elt (agent-shell--state) :supports-session-resume)
+                (map-elt (agent-shell--state) :supports-session-load))
+      (user-error "Agent does not support session resume or load"))
+    (agent-shell--emit-event :event 'session-list)
+    (acp-send-request
+     :client (map-elt (agent-shell--state) :client)
+     :request (acp-make-session-list-request
+               :cwd (agent-shell--resolve-path (agent-shell-cwd)))
+     :buffer shell-buffer
+     :on-success (lambda (acp-response)
+                   (let ((acp-sessions (append (or (map-elt acp-response 'sessions) '()) nil)))
+                     (if (seq-empty-p acp-sessions)
+                         (user-error "No sessions available to resume")
+                       (condition-case nil
+                           (let* ((acp-session (agent-shell--prompt-select-existing-session acp-sessions))
+                                  (acp-session-id (map-elt acp-session 'sessionId)))
+                             (agent-shell--emit-event
+                              :event 'session-selected
+                              :data (list (cons :session-id acp-session-id)))
+                             (agent-shell--resume-session
+                              :shell-buffer shell-buffer
+                              :acp-session acp-session))
+                         (quit
+                          (agent-shell--emit-event :event 'session-selection-cancelled)
+                          (message "Session selection cancelled"))))))
+     :on-failure (agent-shell--make-error-handler
+                  :state (agent-shell--state) :shell-buffer shell-buffer))))
 
 (defun agent-shell--eval-dynamic-values (obj)
   "Recursively evaluate any lambda values in OBJ.
@@ -5523,6 +5792,7 @@ Mark model using CURRENT-MODEL-ID."
     ("d" "Dwim" agent-shell-send-dwim :transient t)
     ]]
   [["Session"
+    ("r" "Resume session" agent-shell-resume-session :transient t)
     ("m" "Cycle modes" agent-shell-cycle-session-mode :transient t)
     ("M" "Set mode" agent-shell-set-session-mode :transient t)
     ("v" "Set model" agent-shell-set-session-model :transient t)

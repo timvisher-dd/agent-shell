@@ -35,6 +35,7 @@
 (autoload 'agent-shell-make-agent-config "agent-shell")
 (declare-function agent-shell--make-acp-client "agent-shell")
 (declare-function agent-shell-start "agent-shell")
+(declare-function agent-shell-resume-session "agent-shell")
 
 (cl-defun agent-shell-make-auggie-authentication (&key login none)
   "Create Auggie authentication configuration.
@@ -110,6 +111,11 @@ Returns an agent configuration alist using `agent-shell-make-agent-config'."
   (interactive)
   (agent-shell-start
    :config (agent-shell-auggie-make-agent-config)))
+
+(defun agent-shell-auggie-resume-session ()
+  "Resume an Auggie agent session."
+  (interactive)
+  (agent-shell-resume-session :config (agent-shell-auggie-make-agent-config)))
 
 (cl-defun agent-shell-auggie-make-client (&key buffer)
   "Create an Auggie client using configured authentication with BUFFER as context.

@@ -35,6 +35,7 @@
 (autoload 'agent-shell-make-agent-config "agent-shell")
 (declare-function agent-shell--make-acp-client "agent-shell")
 (declare-function agent-shell--dwim "agent-shell")
+(declare-function agent-shell-resume-session "agent-shell")
 
 (cl-defun agent-shell-make-goose-authentication (&key openai-api-key none)
   "Create Goose authentication configuration.
@@ -115,6 +116,11 @@ Returns an agent configuration alist using `agent-shell-make-agent-config'."
   (interactive)
   (agent-shell--dwim :config (agent-shell-goose-make-agent-config)
                      :new-shell t))
+
+(defun agent-shell-goose-resume-session ()
+  "Resume a Goose agent session."
+  (interactive)
+  (agent-shell-resume-session :config (agent-shell-goose-make-agent-config)))
 
 (cl-defun agent-shell-goose-make-client (&key buffer)
   "Create a Goose client using configured authentication with BUFFER as context.

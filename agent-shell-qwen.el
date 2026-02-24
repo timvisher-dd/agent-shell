@@ -36,6 +36,7 @@
 (declare-function agent-shell-make-agent-config "agent-shell")
 (autoload 'agent-shell-make-agent-config "agent-shell")
 (declare-function agent-shell--dwim "agent-shell")
+(declare-function agent-shell-resume-session "agent-shell")
 
 (cl-defun agent-shell-qwen-make-authentication (&key login none)
   "Create Qwen Code authentication configuration.
@@ -122,6 +123,11 @@ Returns an agent configuration alist using `agent-shell-make-agent-config'."
   (interactive)
   (agent-shell--dwim :config (agent-shell-qwen-make-agent-config)
                      :new-shell t))
+
+(defun agent-shell-qwen-resume-session ()
+  "Resume a Qwen Code CLI agent session."
+  (interactive)
+  (agent-shell-resume-session :config (agent-shell-qwen-make-agent-config)))
 
 (cl-defun agent-shell-qwen-make-client (&key buffer)
   "Create a Qwen Code client with BUFFER as context."

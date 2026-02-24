@@ -40,6 +40,7 @@
 (autoload 'agent-shell-make-agent-config "agent-shell")
 (declare-function agent-shell--make-acp-client "agent-shell")
 (declare-function agent-shell--dwim "agent-shell")
+(declare-function agent-shell-resume-session "agent-shell")
 
 (defcustom agent-shell-pi-acp-command
   '("pi-acp")
@@ -88,6 +89,11 @@ Requires pi-acp adapter for ACP integration."))
   (interactive)
   (agent-shell--dwim :config (agent-shell-pi-make-agent-config)
                      :new-shell t))
+
+(defun agent-shell-pi-resume-session ()
+  "Resume a Pi coding agent session."
+  (interactive)
+  (agent-shell-resume-session :config (agent-shell-pi-make-agent-config)))
 
 (cl-defun agent-shell-pi-make-client (&key buffer)
   "Create a Pi client using BUFFER as context.

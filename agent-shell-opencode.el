@@ -35,6 +35,7 @@
 (autoload 'agent-shell-make-agent-config "agent-shell")
 (declare-function agent-shell--make-acp-client "agent-shell")
 (declare-function agent-shell--dwim "agent-shell")
+(declare-function agent-shell-resume-session "agent-shell")
 
 (cl-defun agent-shell-opencode-make-authentication (&key api-key none)
   "Create OpenCode authentication configuration.
@@ -135,6 +136,11 @@ Returns an agent configuration alist using `agent-shell-make-agent-config'."
   (interactive)
   (agent-shell--dwim :config (agent-shell-opencode-make-agent-config)
                      :new-shell t))
+
+(defun agent-shell-opencode-resume-session ()
+  "Resume an OpenCode agent session."
+  (interactive)
+  (agent-shell-resume-session :config (agent-shell-opencode-make-agent-config)))
 
 (cl-defun agent-shell-opencode-make-client (&key buffer)
   "Create an OpenCode client using BUFFER as context.

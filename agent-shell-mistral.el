@@ -35,6 +35,7 @@
 (declare-function agent-shell-make-agent-config "agent-shell")
 (autoload 'agent-shell-make-agent-config "agent-shell")
 (declare-function agent-shell--dwim "agent-shell")
+(declare-function agent-shell-resume-session "agent-shell")
 
 (cl-defun agent-shell-mistral-make-authentication (&key api-key)
   "Create Mistral AI authentication configuration.
@@ -124,6 +125,11 @@ Returns an agent configuration alist using `agent-shell-make-agent-config'."
   (interactive)
   (agent-shell--dwim :config (agent-shell-mistral-make-config)
                      :new-shell t))
+
+(defun agent-shell-mistral-resume-session ()
+  "Resume a Mistral Vibe agent session."
+  (interactive)
+  (agent-shell-resume-session :config (agent-shell-mistral-make-config)))
 
 (cl-defun agent-shell-mistral-make-client (&key buffer)
   "Create a Mistral Vibe ACP client with BUFFER as context.

@@ -35,6 +35,7 @@
 (declare-function agent-shell-make-agent-config "agent-shell")
 (autoload 'agent-shell-make-agent-config "agent-shell")
 (declare-function agent-shell--dwim "agent-shell")
+(declare-function agent-shell-resume-session "agent-shell")
 
 (cl-defun agent-shell-anthropic-make-authentication (&key api-key login)
   "Create anthropic authentication configuration.
@@ -140,6 +141,11 @@ Returns an agent configuration alist using `agent-shell-make-agent-config'."
   (interactive)
   (agent-shell--dwim :config (agent-shell-anthropic-make-claude-code-config)
                      :new-shell t))
+
+(defun agent-shell-anthropic-resume-session ()
+  "Resume a Claude Code agent session."
+  (interactive)
+  (agent-shell-resume-session :config (agent-shell-anthropic-make-claude-code-config)))
 
 (cl-defun agent-shell-anthropic-make-claude-client (&key buffer)
   "Create a Claude Code ACP client with BUFFER as context.

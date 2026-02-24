@@ -36,6 +36,7 @@
 (declare-function agent-shell-make-agent-config "agent-shell")
 (autoload 'agent-shell-make-agent-config "agent-shell")
 (declare-function agent-shell--dwim "agent-shell")
+(declare-function agent-shell-resume-session "agent-shell")
 
 (cl-defun agent-shell-google-make-authentication (&key api-key login vertex-ai none)
   "Create Google authentication configuration.
@@ -165,6 +166,11 @@ Returns an agent configuration alist using `agent-shell-make-agent-config'."
   (interactive)
   (agent-shell--dwim :config (agent-shell-google-make-gemini-config)
                      :new-shell t))
+
+(defun agent-shell-google-resume-session ()
+  "Resume a Gemini CLI agent session."
+  (interactive)
+  (agent-shell-resume-session :config (agent-shell-google-make-gemini-config)))
 
 (cl-defun agent-shell-google-make-gemini-client (&key buffer)
   "Create a Gemini client using configured authentication with BUFFER as context.

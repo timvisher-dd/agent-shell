@@ -35,6 +35,7 @@
 (autoload 'agent-shell-make-agent-config "agent-shell")
 (declare-function agent-shell--make-acp-client "agent-shell")
 (declare-function agent-shell--dwim "agent-shell")
+(declare-function agent-shell-resume-session "agent-shell")
 
 (defcustom agent-shell-github-acp-command
   '("copilot" "--acp")
@@ -94,6 +95,11 @@ Returns an agent configuration alist using `agent-shell-make-agent-config'."
   (interactive)
   (agent-shell--dwim :config (agent-shell-github-make-copilot-config)
                      :new-shell t))
+
+(defun agent-shell-github-resume-session ()
+  "Resume a GitHub Copilot agent session."
+  (interactive)
+  (agent-shell-resume-session :config (agent-shell-github-make-copilot-config)))
 
 (cl-defun agent-shell-github-make-client (&key buffer)
   "Create a GitHub Copilot agent ACP client with BUFFER as context."

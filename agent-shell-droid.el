@@ -36,6 +36,7 @@
 (autoload 'agent-shell-make-agent-config "agent-shell")
 (declare-function agent-shell--make-acp-client "agent-shell")
 (declare-function agent-shell--dwim "agent-shell")
+(declare-function agent-shell-resume-session "agent-shell")
 
 (cl-defun agent-shell-droid-make-authentication (&key api-key none)
   "Create Factory Droid authentication configuration.
@@ -118,6 +119,11 @@ Returns an agent configuration alist using `agent-shell-make-agent-config'."
   (interactive)
   (agent-shell--dwim :config (agent-shell-droid-make-agent-config)
                      :new-shell t))
+
+(defun agent-shell-droid-resume-session ()
+  "Resume a Factory Droid agent session."
+  (interactive)
+  (agent-shell-resume-session :config (agent-shell-droid-make-agent-config)))
 
 (cl-defun agent-shell-droid-make-client (&key buffer)
   "Create a Factory Droid client using BUFFER as context.

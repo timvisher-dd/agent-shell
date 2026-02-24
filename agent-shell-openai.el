@@ -35,6 +35,7 @@
 (declare-function agent-shell-make-agent-config "agent-shell")
 (autoload 'agent-shell-make-agent-config "agent-shell")
 (declare-function agent-shell--dwim "agent-shell")
+(declare-function agent-shell-resume-session "agent-shell")
 
 (cl-defun agent-shell-openai-make-authentication (&key api-key codex-api-key login)
   "Create OpenAI authentication configuration.
@@ -136,6 +137,11 @@ Returns an agent configuration alist using `agent-shell-make-agent-config'."
   (interactive)
   (agent-shell--dwim :config (agent-shell-openai-make-codex-config)
                      :new-shell t))
+
+(defun agent-shell-openai-resume-session ()
+  "Resume a Codex agent session."
+  (interactive)
+  (agent-shell-resume-session :config (agent-shell-openai-make-codex-config)))
 
 (cl-defun agent-shell-openai-make-codex-client (&key buffer)
   "Create a Codex client using configured authentication with BUFFER as context.
