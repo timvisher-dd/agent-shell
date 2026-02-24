@@ -128,7 +128,6 @@ For example:
          (entry (map-elt tool-calls tool-call-id)))
     (when entry
       (setf (map-elt entry :output-chunks) nil)
-      (setf (map-elt entry :output-last) nil)
       (setf (map-elt entry :output-marker) nil)
       (setf (map-elt entry :output-ui-state) nil)
       (setf (map-elt tool-calls tool-call-id) entry)
