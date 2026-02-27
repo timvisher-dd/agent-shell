@@ -586,6 +586,7 @@ OUTGOING-REQUEST-DECORATOR (passed through to `acp-make-client')."
                              (cons :mode-id nil)
                              (cons :modes nil)))
         (cons :last-entry-type nil)
+        (cons :turn-completed nil)
         (cons :chunked-group-count 0)
         (cons :request-count 0)
         (cons :tool-calls nil)
@@ -1178,52 +1179,56 @@ COMMAND, when present, may be a shell command string or an argv vector."
                     :expanded t)))
                (map-put! state :last-entry-type "tool_call"))
               ((equal (map-elt update 'sessionUpdate) "agent_thought_chunk")
-               (let-alist update
-                 ;; (message "agent_thought_chunk: last-type=%s, will-append=%s"
-                 ;;          (map-elt state :last-entry-type)
-                 ;;          (equal (map-elt state :last-entry-type) "agent_thought_chunk"))
-                 (unless (equal (map-elt state :last-entry-type)
-                                "agent_thought_chunk")
+               ;; Drop stale notifications that arrive after the turn completed.
+               (unless (map-elt state :turn-completed)
+                 (let-alist update
+                   ;; (message "agent_thought_chunk: last-type=%s, will-append=%s"
+                   ;;          (map-elt state :last-entry-type)
+                   ;;          (equal (map-elt state :last-entry-type) "agent_thought_chunk"))
+                   (unless (equal (map-elt state :last-entry-type)
+                                  "agent_thought_chunk")
+                     (map-put! state :chunked-group-count (1+ (map-elt state :chunked-group-count)))
+                     (agent-shell--append-transcript
+                      :text (format "## Agent's Thoughts (%s)\n\n" (format-time-string "%F %T"))
+                      :file-path agent-shell--transcript-file))
+                   (agent-shell--append-transcript
+                    :text .content.text
+                    :file-path agent-shell--transcript-file)
+                   (agent-shell--update-fragment
+                    :state state
+                    :block-id (format "%s-agent_thought_chunk"
+                                      (map-elt state :chunked-group-count))
+                    :label-left  (concat
+                                  agent-shell-thought-process-icon
+                                  " "
+                                  (propertize "Thought process" 'font-lock-face font-lock-doc-markup-face))
+                    :body .content.text
+                    :append (equal (map-elt state :last-entry-type)
+                                   "agent_thought_chunk")
+                    :expanded agent-shell-thought-process-expand-by-default))
+                 (map-put! state :last-entry-type "agent_thought_chunk")))
+              ((equal (map-elt update 'sessionUpdate) "agent_message_chunk")
+               ;; Drop stale notifications that arrive after the turn completed.
+               (unless (map-elt state :turn-completed)
+                 (unless (equal (map-elt state :last-entry-type) "agent_message_chunk")
                    (map-put! state :chunked-group-count (1+ (map-elt state :chunked-group-count)))
                    (agent-shell--append-transcript
-                    :text (format "## Agent's Thoughts (%s)\n\n" (format-time-string "%F %T"))
+                    :text (format "\n## Agent (%s)\n\n" (format-time-string "%F %T"))
                     :file-path agent-shell--transcript-file))
-                 (agent-shell--append-transcript
-                  :text .content.text
-                  :file-path agent-shell--transcript-file)
-                 (agent-shell--update-fragment
-                  :state state
-                  :block-id (format "%s-agent_thought_chunk"
-                                    (map-elt state :chunked-group-count))
-                  :label-left  (concat
-                                agent-shell-thought-process-icon
-                                " "
-                                (propertize "Thought process" 'font-lock-face font-lock-doc-markup-face))
-                  :body .content.text
-                  :append (equal (map-elt state :last-entry-type)
-                                 "agent_thought_chunk")
-                  :expanded agent-shell-thought-process-expand-by-default))
-               (map-put! state :last-entry-type "agent_thought_chunk"))
-              ((equal (map-elt update 'sessionUpdate) "agent_message_chunk")
-               (unless (equal (map-elt state :last-entry-type) "agent_message_chunk")
-                 (map-put! state :chunked-group-count (1+ (map-elt state :chunked-group-count)))
-                 (agent-shell--append-transcript
-                  :text (format "\n## Agent (%s)\n\n" (format-time-string "%F %T"))
-                  :file-path agent-shell--transcript-file))
-               (let-alist update
-                 (agent-shell--append-transcript
-                  :text .content.text
-                  :file-path agent-shell--transcript-file)
-                 (agent-shell--update-fragment
-                  :state state
-                  :block-id (format "%s-agent_message_chunk"
-                                    (map-elt state :chunked-group-count))
-                  :body .content.text
-                  :create-new (not (equal (map-elt state :last-entry-type)
-                                          "agent_message_chunk"))
-                  :append t
-                  :navigation 'never))
-               (map-put! state :last-entry-type "agent_message_chunk"))
+                 (let-alist update
+                   (agent-shell--append-transcript
+                    :text .content.text
+                    :file-path agent-shell--transcript-file)
+                   (agent-shell--update-fragment
+                    :state state
+                    :block-id (format "%s-agent_message_chunk"
+                                      (map-elt state :chunked-group-count))
+                    :body .content.text
+                    :create-new (not (equal (map-elt state :last-entry-type)
+                                            "agent_message_chunk"))
+                    :append t
+                    :navigation 'never))
+                 (map-put! state :last-entry-type "agent_message_chunk")))
               ((equal (map-elt update 'sessionUpdate) "user_message_chunk")
                (let ((new-prompt-p (not (equal (map-elt state :last-entry-type)
                                                "user_message_chunk"))))
@@ -3936,6 +3941,7 @@ If FILE-PATH is not an image, returns nil."
        :heartbeat (map-elt agent-shell--state :heartbeat)))
 
     (map-put! agent-shell--state :last-entry-type nil)
+    (map-put! agent-shell--state :turn-completed nil)
 
     (agent-shell--append-transcript
      :text (format "## User (%s)\n\n%s\n\n"
@@ -3958,6 +3964,10 @@ If FILE-PATH is not an image, returns nil."
                :prompt content-blocks)
      :buffer (current-buffer)
      :on-success (lambda (response)
+                   ;; Mark the turn as completed so late-arriving
+                   ;; notifications (e.g. from async PostToolUse hooks)
+                   ;; are dropped rather than displayed as a new message.
+                   (map-put! (agent-shell--state) :turn-completed t)
                    (when (equal (map-elt (agent-shell--state) :last-entry-type) "agent_message_chunk")
                      (agent-shell--append-transcript
                       :text "\n\n"

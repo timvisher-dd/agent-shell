@@ -490,7 +490,8 @@
                              (cons :session (list (cons :id "test-session")))
                              (cons :prompt-capabilities '((:embedded-context . t)))
                              (cons :buffer (current-buffer))
-                             (cons :last-entry-type nil))))
+                             (cons :last-entry-type nil)
+                             (cons :turn-completed nil))))
 
     ;; Mock acp-send-request to capture what gets sent;
     ;; stub viewport--buffer to avoid interactive shell-buffer prompt in batch.
@@ -523,7 +524,8 @@
                              (cons :session (list (cons :id "test-session")))
                              (cons :prompt-capabilities '((:embedded-context . t)))
                              (cons :buffer (current-buffer))
-                             (cons :last-entry-type nil))))
+                             (cons :last-entry-type nil)
+                             (cons :turn-completed nil))))
 
     ;; Mock build-content-blocks to throw an error;
     ;; stub viewport--buffer to avoid interactive shell-buffer prompt in batch.
@@ -1398,6 +1400,86 @@ code block content
     (should (string-match-p "\\*\\*Parameters:\\*\\*" entry))
     (should (string-match-p "filePath: /home/user/test.txt" entry))
     (should (string-match-p "offset: 100" entry))))
+
+(ert-deftest agent-shell--stale-notification-after-turn-completion ()
+  "Test that late agent_message_chunk from a completed turn is dropped.
+
+Scenario:
+  1. Turn 1: agent responds with agent_message_chunk → state tracks it.
+  2. Turn 1 completes: on-success sets :turn-completed to t.
+  3. New prompt resets :last-entry-type to nil and :turn-completed to nil.
+     But before that reset, a stale agent_message_chunk arrives.
+  4. The stale chunk is dropped because :turn-completed is t."
+  (with-temp-buffer
+    (let* ((fragment-calls '())
+           (agent-shell--transcript-file nil)
+           (state `((:buffer . ,(current-buffer))
+                    (:client . test-client)
+                    (:session . ((:id . "test-session")))
+                    (:last-entry-type . nil)
+                    (:turn-completed . nil)
+                    (:chunked-group-count . 0)
+                    (:request-count . 1)
+                    (:tool-calls . nil)
+                    (:event-subscriptions . nil))))
+      (setq-local agent-shell--state state)
+      (cl-letf (((symbol-function 'agent-shell--state)
+                 (lambda () agent-shell--state))
+                ((symbol-function 'agent-shell--update-fragment)
+                 (lambda (&rest args)
+                   (push args fragment-calls)))
+                ((symbol-function 'agent-shell--update-text)
+                 (lambda (&rest _args) nil))
+                ((symbol-function 'agent-shell--emit-event)
+                 (lambda (&rest _args) nil))
+                ((symbol-function 'agent-shell--append-transcript)
+                 (lambda (&rest _args) nil)))
+
+        ;; --- Turn 1: normal agent_message_chunk arrives ---
+        (agent-shell--on-notification
+         :state state
+         :notification '((method . "session/update")
+                         (params . ((update . ((sessionUpdate . "agent_message_chunk")
+                                               (content . ((text . "Turn 1 response")))))))))
+
+        (should (equal (map-elt state :last-entry-type) "agent_message_chunk"))
+        (should (equal (map-elt state :chunked-group-count) 1))
+        (let ((first-call (car fragment-calls)))
+          (should (equal (plist-get first-call :body) "Turn 1 response"))
+          (should (equal (plist-get first-call :create-new) t)))
+
+        ;; --- Turn 1 completes (on-success fires) ---
+        (map-put! state :turn-completed t)
+        (setq fragment-calls nil)
+
+        ;; --- Stale agent_message_chunk from turn 1 arrives late ---
+        (agent-shell--on-notification
+         :state state
+         :notification '((method . "session/update")
+                         (params . ((update . ((sessionUpdate . "agent_message_chunk")
+                                               (content . ((text . "Stale turn 1 text")))))))))
+
+        ;; Stale notification is dropped: no new fragment, count unchanged.
+        (should (equal (map-elt state :chunked-group-count) 1))
+        (should (null fragment-calls))
+
+        ;; --- New prompt resets state for turn 2 ---
+        (map-put! state :last-entry-type nil)
+        (map-put! state :turn-completed nil)
+
+        ;; --- Turn 2: fresh agent_message_chunk arrives ---
+        (agent-shell--on-notification
+         :state state
+         :notification '((method . "session/update")
+                         (params . ((update . ((sessionUpdate . "agent_message_chunk")
+                                               (content . ((text . "Turn 2 response")))))))))
+
+        ;; Turn 2 chunk is processed normally.
+        (should (equal (map-elt state :chunked-group-count) 2))
+        (should (equal (map-elt state :last-entry-type) "agent_message_chunk"))
+        (let ((turn2-call (car fragment-calls)))
+          (should (equal (plist-get turn2-call :body) "Turn 2 response"))
+          (should (equal (plist-get turn2-call :create-new) t)))))))
 
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here
