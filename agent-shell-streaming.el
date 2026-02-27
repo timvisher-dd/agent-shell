@@ -352,6 +352,35 @@ back to content-text extraction."
          :expanded agent-shell-tool-use-expand-by-default))
       (agent-shell--tool-call-clear-output state .toolCallId))))
 
+;;; Thought chunk dedup
+
+(defun agent-shell--thought-chunk-delta (accumulated chunk)
+  "Return the portion of CHUNK not already present in ACCUMULATED.
+When an agent re-delivers the full accumulated thought text (e.g.
+codex-acp sending a cumulative summary after incremental tokens),
+only the genuinely new tail is returned.
+
+Three cases are handled:
+  ;; Cumulative from start (prefix match)
+  (agent-shell--thought-chunk-delta \"AB\" \"ABCD\")  => \"CD\"
+
+  ;; Already present (suffix match, e.g. leading whitespace trimmed)
+  (agent-shell--thought-chunk-delta \"\\n\\nABCD\" \"ABCD\")  => \"\"
+
+  ;; Incremental token (no overlap)
+  (agent-shell--thought-chunk-delta \"AB\" \"CD\")  => \"CD\""
+  (cond
+   ((or (null accumulated) (string-empty-p accumulated))
+    chunk)
+   ;; Chunk starts with all accumulated text (cumulative from start).
+   ((string-prefix-p accumulated chunk)
+    (substring chunk (length accumulated)))
+   ;; Chunk is already fully contained as a suffix of accumulated
+   ;; (e.g. re-delivery omits leading whitespace tokens).
+   ((string-suffix-p chunk accumulated)
+    "")
+   (t chunk)))
+
 ;;; Cancellation
 
 (defun agent-shell--mark-tool-calls-cancelled (state)

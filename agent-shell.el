@@ -773,6 +773,7 @@ OUTGOING-REQUEST-DECORATOR (passed through to `acp-make-client')."
                              (cons :modes nil)))
         (cons :last-entry-type nil)
         (cons :chunked-group-count 0)
+        (cons :thought-accumulated nil)
         (cons :request-count 0)
         (cons :tool-calls nil)
         (cons :available-commands nil)
@@ -1428,28 +1429,34 @@ COMMAND, when present, may be a shell command string or an argv vector."
                         agent-shell-thought-process-icon
                         (propertize "Thought process" 'face font-lock-doc-markup-face)
                         (truncate-string-to-width (map-nested-elt acp-notification '(params update content text)) 100))
-             (unless (equal (map-elt state :last-entry-type)
-                            "agent_thought_chunk")
-               (map-put! state :chunked-group-count (1+ (map-elt state :chunked-group-count)))
-               (agent-shell--append-transcript
-                :text (format "## Agent's Thoughts (%s)\n\n" (format-time-string "%F %T"))
-                :file-path agent-shell--transcript-file))
-             (agent-shell--append-transcript
-              :text (agent-shell--indent-markdown-headers
-                     (map-nested-elt acp-notification '(params update content text)))
-              :file-path agent-shell--transcript-file)
-             (agent-shell--update-fragment
-              :state state
-              :block-id (format "%s-agent_thought_chunk"
-                                (map-elt state :chunked-group-count))
-              :label-left  (concat
-                            agent-shell-thought-process-icon
-                            " "
-                            (propertize "Thought process" 'font-lock-face font-lock-doc-markup-face))
-              :body (map-nested-elt acp-notification '(params update content text))
-              :append (equal (map-elt state :last-entry-type)
-                             "agent_thought_chunk")
-              :expanded agent-shell-thought-process-expand-by-default)
+             (let ((new-group (not (equal (map-elt state :last-entry-type)
+                                          "agent_thought_chunk"))))
+               (when new-group
+                 (map-put! state :chunked-group-count (1+ (map-elt state :chunked-group-count)))
+                 (map-put! state :thought-accumulated nil)
+                 (agent-shell--append-transcript
+                  :text (format "## Agent's Thoughts (%s)\n\n" (format-time-string "%F %T"))
+                  :file-path agent-shell--transcript-file))
+               (let ((delta (agent-shell--thought-chunk-delta
+                             (map-elt state :thought-accumulated)
+                             (map-nested-elt acp-notification '(params update content text)))))
+                 (map-put! state :thought-accumulated
+                           (concat (or (map-elt state :thought-accumulated) "") delta))
+                 (when (and delta (not (string-empty-p delta)))
+                   (agent-shell--append-transcript
+                    :text delta
+                    :file-path agent-shell--transcript-file)
+                   (agent-shell--update-fragment
+                    :state state
+                    :block-id (format "%s-agent_thought_chunk"
+                                      (map-elt state :chunked-group-count))
+                    :label-left  (concat
+                                  agent-shell-thought-process-icon
+                                  " "
+                                  (propertize "Thought process" 'font-lock-face font-lock-doc-markup-face))
+                    :body delta
+                    :append (not new-group)
+                    :expanded agent-shell-thought-process-expand-by-default))))
              (map-put! state :last-entry-type "agent_thought_chunk")))
           ((equal (map-nested-elt acp-notification '(params update sessionUpdate)) "agent_message_chunk")
            ;; Notification is out of context (session/prompt finished).

@@ -223,5 +223,74 @@ c)))
   (kill-buffer buffer)))))
 
 
+;;; Thought chunk dedup tests
+
+(ert-deftest agent-shell--thought-chunk-delta-incremental-test ()
+  "Incremental tokens with no prefix overlap pass through unchanged."
+  (should (equal (agent-shell--thought-chunk-delta "AB" "CD") "CD"))
+  (should (equal (agent-shell--thought-chunk-delta nil "hello") "hello"))
+  (should (equal (agent-shell--thought-chunk-delta "" "hello") "hello")))
+
+(ert-deftest agent-shell--thought-chunk-delta-cumulative-test ()
+  "Cumulative re-delivery returns only the new tail."
+  (should (equal (agent-shell--thought-chunk-delta "AB" "ABCD") "CD"))
+  (should (equal (agent-shell--thought-chunk-delta "hello " "hello world") "world")))
+
+(ert-deftest agent-shell--thought-chunk-delta-exact-duplicate-test ()
+  "Exact duplicate returns empty string."
+  (should (equal (agent-shell--thought-chunk-delta "ABCD" "ABCD") "")))
+
+(ert-deftest agent-shell--thought-chunk-delta-suffix-test ()
+  "Chunk already present as suffix of accumulated returns empty string.
+This handles the case where leading whitespace tokens were streamed
+incrementally but the re-delivery omits them."
+  (should (equal (agent-shell--thought-chunk-delta "\n\nABCD" "ABCD") ""))
+  (should (equal (agent-shell--thought-chunk-delta "\n\n**bold**" "**bold**") "")))
+
+(ert-deftest agent-shell--thought-chunk-no-duplication-test ()
+  "Thought chunks must not produce duplicate output in the buffer.
+Replays the codex doubling pattern: incremental tokens followed by
+a cumulative re-delivery of the complete thought text."
+  (let* ((buffer (get-buffer-create " *agent-shell-thought-dedup*"))
+         (agent-shell--state (agent-shell--make-state :buffer buffer))
+         (agent-shell--transcript-file nil)
+         (thought-text "**Checking beads**\n\nLooking for .beads directory."))
+    (map-put! agent-shell--state :client 'test-client)
+    (map-put! agent-shell--state :request-count 1)
+    (with-current-buffer buffer
+      (erase-buffer)
+      (agent-shell-mode))
+    (unwind-protect
+        (with-current-buffer buffer
+          ;; Send incremental tokens
+          (dolist (token (list "\n\n" "**Checking" " beads**" "\n\n"
+                               "Looking" " for" " .beads" " directory."))
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :notification `((method . "session/update")
+                             (params . ((update
+                                         . ((sessionUpdate . "agent_thought_chunk")
+                                            (content (type . "text")
+                                                     (text . ,token)))))))))
+          ;; Cumulative re-delivery of the complete text
+          (agent-shell--on-notification
+           :state agent-shell--state
+           :notification `((method . "session/update")
+                           (params . ((update
+                                       . ((sessionUpdate . "agent_thought_chunk")
+                                          (content (type . "text")
+                                                   (text . ,thought-text))))))))
+          (let* ((buf-text (buffer-substring-no-properties (point-min) (point-max)))
+                 (count (let ((c 0) (s 0))
+                          (while (string-match "Checking beads" buf-text s)
+                            (setq c (1+ c) s (match-end 0)))
+                          c)))
+            ;; Content must be present
+            (should (string-match-p "Checking beads" buf-text))
+            ;; Must appear exactly once (no duplication)
+            (should (= count 1))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 (provide 'agent-shell-streaming-tests)
 ;;; agent-shell-streaming-tests.el ends here
