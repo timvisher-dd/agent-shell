@@ -2735,34 +2735,31 @@ by default, RENDER-BODY-IMAGES to enable inline image rendering in body."
                  (padding-end (map-nested-elt range '(:padding :end)))
                  (block-start (map-nested-elt range '(:block :start)))
                  (block-end (map-nested-elt range '(:block :end))))
-       (save-restriction
-         ;; TODO: Move this to shell-maker?
-         (let ((inhibit-read-only t))
-           ;; comint relies on field property to
-           ;; derive `comint-next-prompt'.
-           ;; Marking as field to avoid false positives in
-           ;; `agent-shell-next-item' and `agent-shell-previous-item'.
-           (add-text-properties (or padding-start block-start)
-                                (or padding-end block-end) '(field output)))
-         ;; Apply markdown overlay to body.
-         (when-let ((body-start (map-nested-elt range '(:body :start)))
-                    (body-end (map-nested-elt range '(:body :end))))
-           (narrow-to-region body-start body-end)
-           (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
-             (markdown-overlays-put))
-           (widen))
-         ;;
-         ;; Note: For now, we're skipping applying markdown overlays
-         ;; on left labels as they currently carry propertized text
-         ;; for statuses (ie. boxed).
-         ;;
-         ;; Apply markdown overlay to right label.
-         (when-let ((label-right-start (map-nested-elt range '(:label-right :start)))
-                    (label-right-end (map-nested-elt range '(:label-right :end))))
-           (narrow-to-region label-right-start label-right-end)
-           (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
-             (markdown-overlays-put))
-           (widen)))
+       ;; markdown-overlays-put moves point (its parsers use
+       ;; goto-char), so save-excursion keeps point stable during
+       ;; streaming.
+       (save-excursion
+         (save-restriction
+           (let ((inhibit-read-only t))
+             (add-text-properties (or padding-start block-start)
+                                  (or padding-end block-end) '(field output)))
+           ;; Apply markdown overlay to body.
+           (when-let ((body-start (map-nested-elt range '(:body :start)))
+                      (body-end (map-nested-elt range '(:body :end))))
+             (narrow-to-region body-start body-end)
+             (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
+               (markdown-overlays-put))
+             (widen))
+           ;; Note: skipping markdown overlays on left labels as
+           ;; they carry propertized text for statuses (boxed).
+           ;;
+           ;; Apply markdown overlay to right label.
+           (when-let ((label-right-start (map-nested-elt range '(:label-right :start)))
+                      (label-right-end (map-nested-elt range '(:label-right :end))))
+             (narrow-to-region label-right-start label-right-end)
+             (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
+               (markdown-overlays-put))
+             (widen))))
        (run-hook-with-args 'agent-shell-section-functions range)))))
 
 (cl-defun agent-shell--update-text (&key state namespace-id block-id text append create-new)
