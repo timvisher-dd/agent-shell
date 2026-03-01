@@ -255,7 +255,7 @@ For example:
   "Build tool call overrides for UPDATE in STATE.
 INCLUDE-CONTENT and INCLUDE-DIFF control optional fields."
   (let ((diff (when include-diff
-                (agent-shell--make-diff-info :tool-call update))))
+                (agent-shell--make-diff-info :acp-tool-call update))))
     (append (list (cons :status (map-elt update 'status)))
             (when include-content
               (list (cons :content (map-elt update 'content))))
@@ -300,7 +300,20 @@ Three cond branches:
         (when (and chunk (not (string-empty-p chunk)))
           (agent-shell--tool-call-append-output-chunk state tool-call-id chunk))))
      (final
-      (agent-shell--handle-tool-call-final state update)))))
+      (agent-shell--handle-tool-call-final state update)))
+    ;; Update labels for non-final updates (final gets labels via
+    ;; handle-tool-call-final).  The rebuild invalidates the output
+    ;; marker used by live terminal streaming, so reset it afterwards.
+    (unless final
+      (let ((tool-call-labels (agent-shell-make-tool-call-label
+                               state tool-call-id)))
+        (agent-shell--update-fragment
+         :state state
+         :block-id tool-call-id
+         :label-left (map-elt tool-call-labels :status)
+         :label-right (map-elt tool-call-labels :title)
+         :expanded agent-shell-tool-use-expand-by-default)
+        (agent-shell--tool-call-set-output-marker state tool-call-id nil)))))
 
 (defun agent-shell--handle-tool-call-final (state update)
   "Render final tool call UPDATE in STATE.
