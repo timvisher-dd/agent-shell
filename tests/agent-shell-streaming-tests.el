@@ -46,7 +46,7 @@
       (agent-shell-mode))
     (unwind-protect
         (cl-letf (((symbol-function 'agent-shell--make-diff-info)
-                   (lambda (&rest _args) nil))
+                   (cl-function (lambda (&key acp-tool-call) (ignore acp-tool-call))))
                   ((symbol-function 'shell-maker-busy)
                    (lambda () t)))
           (with-current-buffer buffer
@@ -78,7 +78,7 @@ Simplified replay without terminal notifications: sends tool_call
       (agent-shell-mode))
     (unwind-protect
         (cl-letf (((symbol-function 'agent-shell--make-diff-info)
-                   (lambda (&rest _args) nil))
+                   (cl-function (lambda (&key acp-tool-call) (ignore acp-tool-call))))
                   ((symbol-function 'shell-maker-busy)
                    (lambda () t)))
           (with-current-buffer buffer
@@ -165,7 +165,7 @@ incremental terminal_output.data chunks, then completed update."
 (agent-shell-mode))
 (unwind-protect
 (cl-letf (((symbol-function 'agent-shell--make-diff-info)
-(lambda (&rest _args) nil))
+(cl-function (lambda (&key acp-tool-call) (ignore acp-tool-call))))
 ((symbol-function 'shell-maker-busy)
 (lambda () t)))
 (with-current-buffer buffer
@@ -327,6 +327,116 @@ remain stable."
         ;; Both chunks present in correct order
         (let ((text (buffer-substring-no-properties (point-min) (point-max))))
           (should (string-match-p "first chunk second chunk" text)))))))
+
+;;; Label status transition tests
+
+(ert-deftest agent-shell--tool-call-update-overrides-uses-correct-keyword-test ()
+  "Overrides with include-diff must use :acp-tool-call keyword.
+Previously used :tool-call which caused a cl-defun keyword error,
+aborting handle-tool-call-final before the label update."
+  (let* ((state (list (cons :tool-calls
+                            (list (cons "tc-1" (list (cons :title "Read")
+                                                     (cons :status "pending")))))))
+         (update '((toolCallId . "tc-1")
+                   (status . "completed")
+                   (content . [((content . ((text . "ok"))))]))))
+    ;; With include-diff=t, this must not signal
+    ;; "Keyword argument :tool-call not one of (:acp-tool-call)"
+    (should (listp (agent-shell--tool-call-update-overrides
+                    state update t t)))))
+
+(ert-deftest agent-shell--tool-call-label-transitions-to-done-test ()
+  "Tool call label must transition from pending to done on completion.
+Replays tool_call (pending) then tool_call_update (completed) and
+verifies the buffer contains the done label, not wait."
+  (let* ((buffer (get-buffer-create " *agent-shell-label-done*"))
+         (agent-shell--state (agent-shell--make-state :buffer buffer))
+         (tool-id "toolu_label_done"))
+    (map-put! agent-shell--state :client 'test-client)
+    (map-put! agent-shell--state :request-count 1)
+    (with-current-buffer buffer
+      (erase-buffer)
+      (agent-shell-mode))
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
+                   (cl-function (lambda (&key acp-tool-call) (ignore acp-tool-call))))
+                  ((symbol-function 'shell-maker-busy)
+                   (lambda () t)))
+          (with-current-buffer buffer
+            ;; tool_call (pending)
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :acp-notification `((method . "session/update")
+                             (params . ((update
+                                         . ((toolCallId . ,tool-id)
+                                            (sessionUpdate . "tool_call")
+                                            (rawInput)
+                                            (status . "pending")
+                                            (title . "Read")
+                                            (kind . "read")))))))
+            ;; Verify initial label is wait (pending)
+            (let ((buf-text (buffer-string)))
+              (should (string-match-p "wait" buf-text)))
+            ;; tool_call_update (completed)
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :acp-notification `((method . "session/update")
+                             (params . ((update
+                                         . ((toolCallId . ,tool-id)
+                                            (sessionUpdate . "tool_call_update")
+                                            (status . "completed")
+                                            (content . [((content . ((text . "file contents"))))])))))))
+            ;; Label must now be done, not wait
+            (let ((buf-text (buffer-string)))
+              (should (string-match-p "done" buf-text))
+              (should-not (string-match-p "wait" buf-text)))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest agent-shell--tool-call-label-updates-on-in-progress-test ()
+  "Non-final tool_call_update must update label from wait to busy.
+Upstream updates labels on every tool_call_update, not just final."
+  (let* ((buffer (get-buffer-create " *agent-shell-label-busy*"))
+         (agent-shell--state (agent-shell--make-state :buffer buffer))
+         (tool-id "toolu_label_busy"))
+    (map-put! agent-shell--state :client 'test-client)
+    (map-put! agent-shell--state :request-count 1)
+    (with-current-buffer buffer
+      (erase-buffer)
+      (agent-shell-mode))
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
+                   (cl-function (lambda (&key acp-tool-call) (ignore acp-tool-call))))
+                  ((symbol-function 'shell-maker-busy)
+                   (lambda () t)))
+          (with-current-buffer buffer
+            ;; tool_call (pending)
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :acp-notification `((method . "session/update")
+                             (params . ((update
+                                         . ((toolCallId . ,tool-id)
+                                            (sessionUpdate . "tool_call")
+                                            (rawInput)
+                                            (status . "pending")
+                                            (title . "Bash")
+                                            (kind . "execute")))))))
+            (let ((buf-text (buffer-string)))
+              (should (string-match-p "wait" buf-text)))
+            ;; tool_call_update (in_progress, no content)
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :acp-notification `((method . "session/update")
+                             (params . ((update
+                                         . ((toolCallId . ,tool-id)
+                                            (sessionUpdate . "tool_call_update")
+                                            (status . "in_progress")))))))
+            ;; Label must now be busy, not wait
+            (let ((buf-text (buffer-string)))
+              (should (string-match-p "busy" buf-text))
+              (should-not (string-match-p "wait" buf-text)))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
 
 (provide 'agent-shell-streaming-tests)
 ;;; agent-shell-streaming-tests.el ends here
