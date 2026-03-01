@@ -46,11 +46,13 @@
       (agent-shell-mode))
     (unwind-protect
         (cl-letf (((symbol-function 'agent-shell--make-diff-info)
-                   (lambda (&rest _args) nil)))
+                   (lambda (&rest _args) nil))
+                  ((symbol-function 'shell-maker-busy)
+                   (lambda () t)))
           (with-current-buffer buffer
             (agent-shell--on-notification
              :state agent-shell--state
-             :notification `((method . "session/update")
+             :acp-notification `((method . "session/update")
                              (params . ((update . ((sessionUpdate . "tool_call_update")
                                                    (toolCallId . "call-1")
                                                    (status . "completed")
@@ -76,12 +78,14 @@ Simplified replay without terminal notifications: sends tool_call
       (agent-shell-mode))
     (unwind-protect
         (cl-letf (((symbol-function 'agent-shell--make-diff-info)
-                   (lambda (&rest _args) nil)))
+                   (lambda (&rest _args) nil))
+                  ((symbol-function 'shell-maker-busy)
+                   (lambda () t)))
           (with-current-buffer buffer
             ;; Notification 1: tool_call (pending)
             (agent-shell--on-notification
              :state agent-shell--state
-             :notification `((method . "session/update")
+             :acp-notification `((method . "session/update")
                              (params . ((update
                                          . ((toolCallId . ,tool-id)
                                             (sessionUpdate . "tool_call")
@@ -92,7 +96,7 @@ Simplified replay without terminal notifications: sends tool_call
             ;; Notification 2: tool_call_update with toolResponse.stdout
             (agent-shell--on-notification
              :state agent-shell--state
-             :notification `((method . "session/update")
+             :acp-notification `((method . "session/update")
                              (params . ((update
                                          . ((_meta (claudeCode (toolResponse (stdout . ,stdout-text)
                                                                              (stderr . "")
@@ -105,7 +109,7 @@ Simplified replay without terminal notifications: sends tool_call
             ;; Notification 3: tool_call_update completed
             (agent-shell--on-notification
              :state agent-shell--state
-             :notification `((method . "session/update")
+             :acp-notification `((method . "session/update")
                              (params . ((update
                                          . ((toolCallId . ,tool-id)
                                             (sessionUpdate . "tool_call_update")
@@ -161,12 +165,14 @@ incremental terminal_output.data chunks, then completed update."
 (agent-shell-mode))
 (unwind-protect
 (cl-letf (((symbol-function 'agent-shell--make-diff-info)
-(lambda (&rest _args) nil)))
+(lambda (&rest _args) nil))
+((symbol-function 'shell-maker-busy)
+(lambda () t)))
 (with-current-buffer buffer
 ;; Notification 1: tool_call (in_progress, terminal content)
 (agent-shell--on-notification
 :state agent-shell--state
-:notification `((method . "session/update")
+:acp-notification `((method . "session/update")
 (params . ((update
 . ((sessionUpdate . "tool_call")
 (toolCallId . ,tool-id)
@@ -180,7 +186,7 @@ incremental terminal_output.data chunks, then completed update."
 ;; Notification 2: first terminal_output.data chunk
 (agent-shell--on-notification
 :state agent-shell--state
-:notification `((method . "session/update")
+:acp-notification `((method . "session/update")
 (params . ((update
 . ((sessionUpdate . "tool_call_update")
 (toolCallId . ,tool-id)
@@ -190,7 +196,7 @@ incremental terminal_output.data chunks, then completed update."
 ;; Notification 3: second terminal_output.data chunk
 (agent-shell--on-notification
 :state agent-shell--state
-:notification `((method . "session/update")
+:acp-notification `((method . "session/update")
 (params . ((update
 . ((sessionUpdate . "tool_call_update")
 (toolCallId . ,tool-id)
@@ -200,7 +206,7 @@ incremental terminal_output.data chunks, then completed update."
 ;; Notification 4: completed
 (agent-shell--on-notification
 :state agent-shell--state
-:notification `((method . "session/update")
+:acp-notification `((method . "session/update")
 (params . ((update
 . ((sessionUpdate . "tool_call_update")
 (toolCallId . ,tool-id)
@@ -261,36 +267,66 @@ a cumulative re-delivery of the complete thought text."
       (erase-buffer)
       (agent-shell-mode))
     (unwind-protect
-        (with-current-buffer buffer
-          ;; Send incremental tokens
-          (dolist (token (list "\n\n" "**Checking" " beads**" "\n\n"
-                               "Looking" " for" " .beads" " directory."))
+        (cl-letf (((symbol-function 'shell-maker-busy)
+                   (lambda () t)))
+          (with-current-buffer buffer
+            ;; Send incremental tokens
+            (dolist (token (list "\n\n" "**Checking" " beads**" "\n\n"
+                                 "Looking" " for" " .beads" " directory."))
+              (agent-shell--on-notification
+               :state agent-shell--state
+               :acp-notification `((method . "session/update")
+                                   (params . ((update
+                                               . ((sessionUpdate . "agent_thought_chunk")
+                                                  (content (type . "text")
+                                                           (text . ,token)))))))))
+            ;; Cumulative re-delivery of the complete text
             (agent-shell--on-notification
              :state agent-shell--state
-             :notification `((method . "session/update")
-                             (params . ((update
-                                         . ((sessionUpdate . "agent_thought_chunk")
-                                            (content (type . "text")
-                                                     (text . ,token)))))))))
-          ;; Cumulative re-delivery of the complete text
-          (agent-shell--on-notification
-           :state agent-shell--state
-           :notification `((method . "session/update")
-                           (params . ((update
-                                       . ((sessionUpdate . "agent_thought_chunk")
-                                          (content (type . "text")
-                                                   (text . ,thought-text))))))))
-          (let* ((buf-text (buffer-substring-no-properties (point-min) (point-max)))
-                 (count (let ((c 0) (s 0))
-                          (while (string-match "Checking beads" buf-text s)
-                            (setq c (1+ c) s (match-end 0)))
-                          c)))
-            ;; Content must be present
-            (should (string-match-p "Checking beads" buf-text))
-            ;; Must appear exactly once (no duplication)
-            (should (= count 1))))
+             :acp-notification `((method . "session/update")
+                                 (params . ((update
+                                             . ((sessionUpdate . "agent_thought_chunk")
+                                                (content (type . "text")
+                                                         (text . ,thought-text))))))))
+            (let* ((buf-text (buffer-substring-no-properties (point-min) (point-max)))
+                   (count (let ((c 0) (s 0))
+                            (while (string-match "Checking beads" buf-text s)
+                              (setq c (1+ c) s (match-end 0)))
+                            c)))
+              ;; Content must be present
+              (should (string-match-p "Checking beads" buf-text))
+              ;; Must appear exactly once (no duplication)
+              (should (= count 1)))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
+
+(ert-deftest agent-shell-ui-update-fragment-append-preserves-point-test ()
+  "Appending body text must not displace point.
+The append-in-place path inserts at the body end without
+delete-and-reinsert, so markers (and thus point via save-excursion)
+remain stable."
+  (with-temp-buffer
+    (let ((inhibit-read-only t))
+      ;; Create a fragment with initial body
+      (let ((model (list (cons :namespace-id "1")
+                         (cons :block-id "pt")
+                         (cons :label-left "Status")
+                         (cons :body "first chunk"))))
+        (agent-shell-ui-update-fragment model :expanded t))
+      ;; Place point inside the body text
+      (goto-char (point-min))
+      (search-forward "first")
+      (let ((saved (point)))
+        ;; Append more body text
+        (let ((model2 (list (cons :namespace-id "1")
+                            (cons :block-id "pt")
+                            (cons :body " second chunk"))))
+          (agent-shell-ui-update-fragment model2 :append t :expanded t))
+        ;; Point must not have moved
+        (should (= (point) saved))
+        ;; Both chunks present in correct order
+        (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+          (should (string-match-p "first chunk second chunk" text)))))))
 
 (provide 'agent-shell-streaming-tests)
 ;;; agent-shell-streaming-tests.el ends here
