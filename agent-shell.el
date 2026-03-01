@@ -70,6 +70,7 @@
 (require 'agent-shell-styles)
 (require 'agent-shell-usage)
 (require 'agent-shell-worktree)
+(require 'agent-shell-streaming)
 (require 'agent-shell-ui)
 (require 'agent-shell-viewport)
 (require 'image)
@@ -956,7 +957,7 @@ END from the buffer."
   "C-c C-o" #'agent-shell-other-buffer
   "<remap> <yank>" #'agent-shell-yank-dwim)
 
-(shell-maker-define-major-mode (agent-shell--make-shell-maker-config) agent-shell-mode-map)
+(shell-maker-define-major-mode (agent-shell--make-shell-maker-config) 'agent-shell-mode-map)
 
 (cl-defun agent-shell--handle (&key command shell-buffer)
   "Handle SHELL-BUFFER COMMAND (and lazy initialize the ACP stack).
