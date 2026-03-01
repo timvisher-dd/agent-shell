@@ -2627,6 +2627,44 @@ variable (see makunbound)"))
       (error "Editing the wrong buffer: %s" (current-buffer)))
     (agent-shell-ui-delete-fragment :namespace-id (map-elt state :request-count) :block-id block-id :no-undo t)))
 
+(defvar-local agent-shell--markdown-overlay-timer nil
+  "Idle timer for debounced markdown overlay processing.")
+
+(defun agent-shell--apply-markdown-overlays (range)
+  "Apply markdown overlays to body and right label in RANGE."
+  (when-let ((body-start (map-nested-elt range '(:body :start)))
+             (body-end (map-nested-elt range '(:body :end))))
+    (narrow-to-region body-start body-end)
+    (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
+      (markdown-overlays-put))
+    (widen))
+  ;; Note: skipping markdown overlays on left labels as
+  ;; they carry propertized text for statuses (boxed).
+  (when-let ((label-right-start (map-nested-elt range '(:label-right :start)))
+             (label-right-end (map-nested-elt range '(:label-right :end))))
+    (narrow-to-region label-right-start label-right-end)
+    (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
+      (markdown-overlays-put))
+    (widen)))
+
+(defun agent-shell--schedule-markdown-overlays (buffer range)
+  "Schedule markdown overlay processing for RANGE in BUFFER at idle time.
+Cancels any pending timer so only the latest range is processed."
+  (with-current-buffer buffer
+    (when (timerp agent-shell--markdown-overlay-timer)
+      (cancel-timer agent-shell--markdown-overlay-timer))
+    (setq agent-shell--markdown-overlay-timer
+          (run-with-idle-timer
+           0.15 nil
+           (lambda ()
+             (when (buffer-live-p buffer)
+               (with-current-buffer buffer
+                 (save-excursion
+                   (save-restriction
+                     (let ((inhibit-read-only t))
+                       (agent-shell--apply-markdown-overlays range))))
+                 (setq agent-shell--markdown-overlay-timer nil))))))))
+
 (cl-defun agent-shell--update-fragment (&key state namespace-id block-id label-left label-right
                                              body append create-new navigation expanded
                                              render-body-images)
@@ -2736,30 +2774,20 @@ by default, RENDER-BODY-IMAGES to enable inline image rendering in body."
                  (block-start (map-nested-elt range '(:block :start)))
                  (block-end (map-nested-elt range '(:block :end))))
        ;; markdown-overlays-put moves point (its parsers use
-       ;; goto-char), so save-excursion keeps point stable during
-       ;; streaming.
+       ;; goto-char), so save-excursion keeps point stable.
        (save-excursion
          (save-restriction
            (let ((inhibit-read-only t))
              (add-text-properties (or padding-start block-start)
                                   (or padding-end block-end) '(field output)))
-           ;; Apply markdown overlay to body.
-           (when-let ((body-start (map-nested-elt range '(:body :start)))
-                      (body-end (map-nested-elt range '(:body :end))))
-             (narrow-to-region body-start body-end)
-             (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
-               (markdown-overlays-put))
-             (widen))
-           ;; Note: skipping markdown overlays on left labels as
-           ;; they carry propertized text for statuses (boxed).
-           ;;
-           ;; Apply markdown overlay to right label.
-           (when-let ((label-right-start (map-nested-elt range '(:label-right :start)))
-                      (label-right-end (map-nested-elt range '(:label-right :end))))
-             (narrow-to-region label-right-start label-right-end)
-             (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
-               (markdown-overlays-put))
-             (widen))))
+           ;; Apply markdown overlays.  During streaming appends the
+           ;; full re-parse is expensive (O(n) per chunk → O(n²)
+           ;; overall), so debounce to idle time.  Non-append updates
+           ;; (new blocks, label changes) run synchronously.
+           (if append
+               (agent-shell--schedule-markdown-overlays
+                (current-buffer) range)
+             (agent-shell--apply-markdown-overlays range))))
        (run-hook-with-args 'agent-shell-section-functions range)))))
 
 (cl-defun agent-shell--update-text (&key state namespace-id block-id text append create-new)
