@@ -85,38 +85,86 @@ For existing blocks, the current expansion state is preserved unless overridden.
         (when match
           (goto-char (prop-match-beginning match)))
         (if (and match (not create-new))
-            ;; Found existing block - delete and regenerate
             (let* ((existing-model (agent-shell-ui--read-fragment-at-point))
                    (state (get-text-property (point) 'agent-shell-ui-state))
                    (existing-body (map-elt existing-model :body))
-                   (block-end (prop-match-end match))
-                   (final-body (if new-body
-                                   (if (and append existing-body)
-                                       (concat existing-body new-body)
-                                     new-body)
-                                 existing-body))
-                   (final-model (list (cons :namespace-id namespace-id)
-                                      (cons :block-id (map-elt model :block-id))
-                                      (cons :label-left (or new-label-left
-                                                            (map-elt existing-model :label-left)))
-                                      (cons :label-right (or new-label-right
-                                                             (map-elt existing-model :label-right)))
-                                      (cons :body final-body))))
+                   (block-end (prop-match-end match)))
               (setq block-start (prop-match-beginning match))
-
-              ;; Safely replace existing block using narrow-to-region
               (save-excursion
                 (goto-char block-start)
                 (skip-chars-backward "\n")
                 (setq padding-start (point)))
-
-              ;; Replace block
-              (delete-region block-start block-end)
-              (goto-char block-start)
-              (agent-shell-ui--insert-fragment final-model qualified-id
-                                               (not (map-elt state :collapsed))
-                                               navigation)
-              (setq padding-end (point)))
+              (if (and append new-body
+                       existing-body (not (string-empty-p existing-body)))
+                  ;; Append in-place: insert only new body text,
+                  ;; avoiding the delete-and-reinsert that displaces point.
+                  (let* ((body-range (agent-shell-ui--nearest-range-matching-property
+                                      :property 'agent-shell-ui-section :value 'body
+                                      :from block-start :to block-end))
+                         (old-body-start (map-elt body-range :start))
+                         (old-body-end (map-elt body-range :end))
+                         (body-text new-body))
+                    ;; Process body text (same as insert-fragment)
+                    (when (string-prefix-p "\n" body-text)
+                      (setq body-text (string-trim-left body-text "\n")))
+                    (when (string-suffix-p "\n\n" body-text)
+                      (setq body-text (concat (string-trim-right body-text) "\n\n")))
+                    (if (map-elt state :collapsed)
+                        ;; Collapsed: insert-and-inherit picks up invisible
+                        ;; from existing body via stickiness.
+                        (progn
+                          (goto-char old-body-end)
+                          (insert-and-inherit (agent-shell-ui--indent-text
+                                              (string-remove-prefix "  " body-text) "  ")))
+                      ;; Expanded: un-hide old trailing whitespace (no longer
+                      ;; trailing), insert, re-hide new trailing whitespace.
+                      (remove-text-properties old-body-start old-body-end
+                                              '(invisible nil))
+                      (goto-char old-body-end)
+                      (insert-and-inherit (agent-shell-ui--indent-text
+                               (string-remove-prefix "  " body-text) "  "))
+                      (let ((new-body-end (point)))
+                        (save-mark-and-excursion
+                          (goto-char new-body-end)
+                          (when (re-search-backward "[^ \t\n]" old-body-start t)
+                            (forward-char 1)
+                            (when (< (point) new-body-end)
+                              (add-text-properties (point) new-body-end
+                                                   '(invisible t)))))))
+                    (let ((new-body-end (point)))
+                      ;; Extend block-level properties to cover new text
+                      (put-text-property block-start new-body-end
+                                         'agent-shell-ui-state
+                                         (get-text-property block-start 'agent-shell-ui-state))
+                      (put-text-property block-start new-body-end 'read-only t)
+                      (put-text-property block-start new-body-end 'front-sticky '(read-only))
+                      ;; Update content-store
+                      (unless agent-shell-ui--content-store
+                        (setq agent-shell-ui--content-store (make-hash-table :test 'equal)))
+                      (puthash (concat qualified-id "-body")
+                               (concat existing-body new-body)
+                               agent-shell-ui--content-store)
+                      (setq padding-end new-body-end)))
+                ;; Full rebuild: delete and regenerate (label change, first
+                ;; body content, or non-append replacement).
+                (let* ((final-body (if new-body
+                                       (if (and append existing-body)
+                                           (concat existing-body new-body)
+                                         new-body)
+                                     existing-body))
+                       (final-model (list (cons :namespace-id namespace-id)
+                                          (cons :block-id (map-elt model :block-id))
+                                          (cons :label-left (or new-label-left
+                                                                (map-elt existing-model :label-left)))
+                                          (cons :label-right (or new-label-right
+                                                                 (map-elt existing-model :label-right)))
+                                          (cons :body final-body))))
+                  (delete-region block-start block-end)
+                  (goto-char block-start)
+                  (agent-shell-ui--insert-fragment final-model qualified-id
+                                                   (not (map-elt state :collapsed))
+                                                   navigation)
+                  (setq padding-end (point)))))
 
           ;; Not found or create-new - insert new block
           (goto-char (point-max))
