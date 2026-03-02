@@ -95,7 +95,9 @@ For existing blocks, the current expansion state is preserved unless overridden.
                 (skip-chars-backward "\n")
                 (setq padding-start (point)))
               (if (and append new-body
-                       existing-body (not (string-empty-p existing-body)))
+                       existing-body (not (string-empty-p existing-body))
+                       (not new-label-left)
+                       (not new-label-right))
                   ;; Append in-place: insert only new body text,
                   ;; avoiding the delete-and-reinsert that displaces point.
                   (let* ((body-range (agent-shell-ui--nearest-range-matching-property

@@ -328,6 +328,36 @@ remain stable."
         (let ((text (buffer-substring-no-properties (point-min) (point-max))))
           (should (string-match-p "first chunk second chunk" text)))))))
 
+(ert-deftest agent-shell-ui-update-fragment-append-with-label-change-test ()
+  "Appending body with a new label must update the label.
+The in-place append path must fall back to a full rebuild when the
+caller provides a new :label-left or :label-right alongside :append t,
+otherwise the label change is silently dropped."
+  (with-temp-buffer
+    (let ((inhibit-read-only t))
+      ;; Create a fragment with initial label and body
+      (let ((model (list (cons :namespace-id "1")
+                         (cons :block-id "boot")
+                         (cons :label-left "[busy] Starting")
+                         (cons :body "Initializing..."))))
+        (agent-shell-ui-update-fragment model :expanded t))
+      ;; Verify initial label
+      (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+        (should (string-match-p "\\[busy\\] Starting" text)))
+      ;; Append body AND change label
+      (let ((model2 (list (cons :namespace-id "1")
+                          (cons :block-id "boot")
+                          (cons :label-left "[done] Starting")
+                          (cons :body "\n\nReady"))))
+        (agent-shell-ui-update-fragment model2 :append t :expanded t))
+      ;; Label must now say [done], not [busy]
+      (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+        (should (string-match-p "\\[done\\] Starting" text))
+        (should-not (string-match-p "\\[busy\\]" text))
+        ;; Body should contain both chunks
+        (should (string-match-p "Initializing" text))
+        (should (string-match-p "Ready" text))))))
+
 ;;; Label status transition tests
 
 (ert-deftest agent-shell--tool-call-update-overrides-uses-correct-keyword-test ()
