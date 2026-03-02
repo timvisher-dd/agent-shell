@@ -2755,8 +2755,16 @@ by default, RENDER-BODY-IMAGES to enable inline image rendering in body."
                  (equal (current-buffer)
                         (map-elt state :buffer)))
       (error "Editing the wrong buffer: %s" (current-buffer)))
-    (shell-maker-with-auto-scroll-edit
-     (when-let* ((range (agent-shell-ui-update-fragment
+    ;; Save process-mark so shell-maker-with-auto-scroll-edit does not
+    ;; drag it past any pending input (e.g. context text inserted by
+    ;; agent-shell--insert-to-shell-buffer at the prompt).  Fragment
+    ;; updates only touch the output area above the prompt, so the
+    ;; process-mark should stay where it was.
+    (let* ((proc (get-buffer-process (current-buffer)))
+           (saved-pmark (when proc
+                          (copy-marker (process-mark proc)))))
+      (shell-maker-with-auto-scroll-edit
+       (when-let* ((range (agent-shell-ui-update-fragment
                          (agent-shell-ui-make-fragment-model
                           :namespace-id (or namespace-id
                                             (map-elt state :request-count))
@@ -2788,7 +2796,10 @@ by default, RENDER-BODY-IMAGES to enable inline image rendering in body."
                (agent-shell--schedule-markdown-overlays
                 (current-buffer) range)
              (agent-shell--apply-markdown-overlays range))))
-       (run-hook-with-args 'agent-shell-section-functions range)))))
+       (run-hook-with-args 'agent-shell-section-functions range)))
+      (when saved-pmark
+        (set-marker (process-mark proc) saved-pmark)
+        (set-marker saved-pmark nil)))))
 
 (cl-defun agent-shell--update-text (&key state namespace-id block-id text append create-new)
   "Update plain text entry in the shell buffer.
@@ -2814,18 +2825,24 @@ APPEND and CREATE-NEW control update behavior."
            :create-new create-new
            :no-undo t))))
     (with-current-buffer (map-elt state :buffer)
-      (shell-maker-with-auto-scroll-edit
-       (when-let* ((range (agent-shell-ui-update-text
-                           :namespace-id ns
-                           :block-id block-id
-                           :text text
-                           :append append
-                           :create-new create-new
-                           :no-undo t))
-                   (block-start (map-nested-elt range '(:block :start)))
-                   (block-end (map-nested-elt range '(:block :end))))
-         (let ((inhibit-read-only t))
-           (add-text-properties block-start block-end '(field output))))))))
+      (let* ((proc (get-buffer-process (current-buffer)))
+             (saved-pmark (when proc
+                            (copy-marker (process-mark proc)))))
+        (shell-maker-with-auto-scroll-edit
+         (when-let* ((range (agent-shell-ui-update-text
+                             :namespace-id ns
+                             :block-id block-id
+                             :text text
+                             :append append
+                             :create-new create-new
+                             :no-undo t))
+                     (block-start (map-nested-elt range '(:block :start)))
+                     (block-end (map-nested-elt range '(:block :end))))
+           (let ((inhibit-read-only t))
+             (add-text-properties block-start block-end '(field output)))))
+        (when saved-pmark
+          (set-marker (process-mark proc) saved-pmark)
+          (set-marker saved-pmark nil))))))
 
 (defun agent-shell-toggle-logging ()
   "Toggle logging."
@@ -5402,6 +5419,7 @@ Returns an alist with insertion details or nil otherwise:
                 (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks)
                       (markdown-overlays-render-images nil))
                   (markdown-overlays-put))))
+            (goto-char insert-start)
             (when submit
               (shell-maker-submit)))
           `((:buffer . ,shell-buffer)
