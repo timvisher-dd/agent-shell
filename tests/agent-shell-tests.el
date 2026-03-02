@@ -2252,5 +2252,111 @@ code block content
           (should (equal (buffer-string) "")))
         (kill-buffer log-buf)))))
 
+(defvar agent-shell-tests--bootstrap-messages
+  '(((:direction . outgoing) (:kind . request)
+     (:object (jsonrpc . "2.0") (method . "initialize") (id . 1)
+              (params (protocolVersion . 1)
+                      (clientCapabilities
+                       (fs (readTextFile . :false)
+                           (writeTextFile . :false))))))
+    ((:direction . incoming) (:kind . response)
+     (:object (jsonrpc . "2.0") (id . 1)
+              (result (protocolVersion . 1)
+                      (authMethods
+                       . [((id . "gemini-api-key")
+                           (name . "Use Gemini API key")
+                           (description . :null))])
+                      (agentCapabilities
+                       (loadSession . :false)
+                       (promptCapabilities (image . t))))))
+    ((:direction . outgoing) (:kind . request)
+     (:object (jsonrpc . "2.0") (method . "authenticate") (id . 2)
+              (params (methodId . "gemini-api-key"))))
+    ((:direction . incoming) (:kind . response)
+     (:object (jsonrpc . "2.0") (id . 2) (result . :null)))
+    ((:direction . outgoing) (:kind . request)
+     (:object (jsonrpc . "2.0") (method . "session/new") (id . 3)
+              (params (cwd . "/tmp") (mcpServers . []))))
+    ((:direction . incoming) (:kind . response)
+     (:object (jsonrpc . "2.0") (id . 3)
+              (result (sessionId . "fake-session-for-test")))))
+  "Minimal ACP bootstrap traffic for insertion tests.")
+
+(defun agent-shell-tests--assert-context-insertion (context-text)
+  "Insert CONTEXT-TEXT into a fake shell and verify buffer invariants.
+
+Asserts:
+ - Point lands at the prompt, not after the context.
+ - Context sits between process-mark and point-max.
+ - A subsequent fragment update does not drag process-mark
+   past the context."
+  (require 'agent-shell-fakes)
+  (let* ((agent-shell-session-strategy 'new)
+         (shell-buffer (agent-shell-fakes-start-agent
+                        agent-shell-tests--bootstrap-messages)))
+    (unwind-protect
+        (with-current-buffer shell-buffer
+          (let ((prompt-end (point-max))
+                (proc (get-buffer-process (current-buffer))))
+            (agent-shell--insert-to-shell-buffer :text context-text
+                                                 :no-focus t
+                                                 :shell-buffer shell-buffer)
+            ;; Point must be at the prompt so the user types before context.
+            (should (= prompt-end (point)))
+            ;; Context text sits between process-mark and point-max.
+            (let ((pmark (marker-position (process-mark proc))))
+              (should (string-match-p
+                       (regexp-quote context-text)
+                       (buffer-substring-no-properties pmark (point-max)))))
+            ;; Fragment update must not drag process-mark past context.
+            (let ((pmark-before (marker-position (process-mark proc))))
+              (agent-shell--update-fragment
+               :state agent-shell--state
+               :namespace-id "bootstrapping"
+               :block-id "test-fragment"
+               :label-left "Test"
+               :body "fragment body")
+              (should (= pmark-before
+                         (marker-position (process-mark proc))))
+              (should (string-match-p
+                       (regexp-quote context-text)
+                       (buffer-substring-no-properties
+                        (marker-position (process-mark proc))
+                        (point-max)))))))
+      (when (buffer-live-p shell-buffer)
+        (kill-buffer shell-buffer)))))
+
+(ert-deftest agent-shell--insert-context-line-source-test ()
+  "Context from `line' source (e.g. magit status line)."
+  (agent-shell-tests--assert-context-insertion
+   "Unstaged changes (2)"))
+
+(ert-deftest agent-shell--insert-context-region-source-test ()
+  "Context from `region' source with file path and code."
+  (agent-shell-tests--assert-context-insertion
+   "agent-shell.el:42-50
+
+(defun my-function ()
+  (let ((x 1))
+    (message \"hello %d\" x)))"))
+
+(ert-deftest agent-shell--insert-context-files-source-test ()
+  "Context from `files' source (file path)."
+  (agent-shell-tests--assert-context-insertion
+   "/home/user/project/src/main.el"))
+
+(ert-deftest agent-shell--insert-context-error-source-test ()
+  "Context from `error' source (flymake/flycheck diagnostic)."
+  (agent-shell-tests--assert-context-insertion
+   "main.el:17:5: error: void-function `foobar'"))
+
+(ert-deftest agent-shell--insert-context-multiline-markdown-test ()
+  "Context containing markdown fences and backticks."
+  (agent-shell-tests--assert-context-insertion
+   "```elisp
+(defun hello ()
+  (message \"world\"))
+```"))
+
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here
