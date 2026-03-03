@@ -218,6 +218,37 @@
       (should-not (string-match-p "(\\?)" formatted)))))
 
 ;; ============================================================
+;; Full compaction replay from observed ACP traffic
+;; ============================================================
+
+(ert-deftest agent-shell-usage--compaction-replay ()
+  "Replay observed traffic: linear fill -> compaction -> refill."
+  (let ((agent-shell-show-context-usage-indicator t)
+        (agent-shell--state (agent-shell-usage-tests--make-state 0 0))
+        (traffic '((48724 . 1000000)
+                   (259218 . 1000000)
+                   (494277 . 1000000)
+                   (729572 . 1000000)
+                   (870846 . 1000000)
+                   (965200 . 1000000)   ; pre-compaction peak
+                   (24095 . 1000000)    ; post-compaction drop
+                   (74111 . 1000000)    ; refilling
+                   (262548 . 1000000))))
+    (dolist (pair traffic)
+      (agent-shell--update-usage-from-notification
+       :state agent-shell--state
+       :acp-update (list (cons 'used (car pair))
+                         (cons 'size (cdr pair)))))
+    ;; Final state reflects last update
+    (should (equal 262548 (map-elt (map-elt agent-shell--state :usage) :context-used)))
+    (should (equal 1000000 (map-elt (map-elt agent-shell--state :usage) :context-size)))
+    ;; Indicator: green, ▂ for 26.3%
+    (agent-shell-usage-tests--with-stub
+      (let ((indicator (agent-shell--context-usage-indicator)))
+        (should (equal 'success (get-text-property 0 'face indicator)))
+        (should (equal "▂" (substring-no-properties indicator)))))))
+
+;; ============================================================
 ;; Regression: model-switch ACP traffic replay
 ;; ============================================================
 
@@ -261,37 +292,6 @@
       (let ((indicator (agent-shell--context-usage-indicator)))
         (should (equal "?" (substring-no-properties indicator)))
         (should (equal 'warning (get-text-property 0 'face indicator)))))))
-
-;; ============================================================
-;; Full compaction replay from observed ACP traffic
-;; ============================================================
-
-(ert-deftest agent-shell-usage--compaction-replay ()
-  "Replay observed traffic: linear fill -> compaction -> refill."
-  (let ((agent-shell-show-context-usage-indicator t)
-        (agent-shell--state (agent-shell-usage-tests--make-state 0 0))
-        (traffic '((48724 . 1000000)
-                   (259218 . 1000000)
-                   (494277 . 1000000)
-                   (729572 . 1000000)
-                   (870846 . 1000000)
-                   (965200 . 1000000)   ; pre-compaction peak
-                   (24095 . 1000000)    ; post-compaction drop
-                   (74111 . 1000000)    ; refilling
-                   (262548 . 1000000))))
-    (dolist (pair traffic)
-      (agent-shell--update-usage-from-notification
-       :state agent-shell--state
-       :acp-update (list (cons 'used (car pair))
-                         (cons 'size (cdr pair)))))
-    ;; Final state reflects last update
-    (should (equal 262548 (map-elt (map-elt agent-shell--state :usage) :context-used)))
-    (should (equal 1000000 (map-elt (map-elt agent-shell--state :usage) :context-size)))
-    ;; Indicator: green, ▂ for 26.3%
-    (agent-shell-usage-tests--with-stub
-      (let ((indicator (agent-shell--context-usage-indicator)))
-        (should (equal 'success (get-text-property 0 'face indicator)))
-        (should (equal "▂" (substring-no-properties indicator)))))))
 
 ;; ============================================================
 ;; agent-shell--save-usage (PromptResponse tokens)
