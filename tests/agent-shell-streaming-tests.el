@@ -526,5 +526,53 @@ tool call has a saved :command.  Verify the fenced block appears."
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
+(ert-deftest agent-shell--tool-call-meta-response-on-final-only-test ()
+  "Meta toolResponse arriving only on the final update must render output.
+Some agents send stdout exclusively on the completed tool_call_update
+with no prior meta chunks.  The output must not be dropped."
+  (let* ((buffer (get-buffer-create " *agent-shell-meta-final*"))
+         (agent-shell--state (agent-shell--make-state :buffer buffer))
+         (tool-id "toolu_meta_final"))
+    (map-put! agent-shell--state :client 'test-client)
+    (map-put! agent-shell--state :request-count 1)
+    (map-put! agent-shell--state :active-request t)
+    (with-current-buffer buffer
+      (erase-buffer)
+      (agent-shell-mode))
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
+                   (cl-function (lambda (&key acp-tool-call) (ignore acp-tool-call)))))
+          (with-current-buffer buffer
+            ;; tool_call (pending)
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :acp-notification `((method . "session/update")
+                             (params . ((update
+                                         . ((toolCallId . ,tool-id)
+                                            (sessionUpdate . "tool_call")
+                                            (rawInput)
+                                            (status . "pending")
+                                            (title . "Bash")
+                                            (kind . "execute")))))))
+            ;; tool_call_update (completed) with _meta stdout only, no prior chunks
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :acp-notification `((method . "session/update")
+                             (params . ((update
+                                         . ((_meta (claudeCode (toolResponse (stdout . "final-only-output")
+                                                                             (stderr . "")
+                                                                             (interrupted)
+                                                                             (isImage)
+                                                                             (noOutputExpected))
+                                                               (toolName . "Bash")))
+                                            (toolCallId . ,tool-id)
+                                            (sessionUpdate . "tool_call_update")
+                                            (status . "completed")))))))
+            ;; Output must be rendered, not dropped
+            (let ((buf-text (buffer-substring-no-properties (point-min) (point-max))))
+              (should (string-match-p "final-only-output" buf-text)))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 (provide 'agent-shell-streaming-tests)
 ;;; agent-shell-streaming-tests.el ends here
