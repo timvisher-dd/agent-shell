@@ -15,6 +15,25 @@
     (should (equal (agent-shell--tool-call-meta-response-text update)
                    "one\n\ntwo"))))
 
+(ert-deftest agent-shell--tool-call-normalize-output-strips-fences-test ()
+  "Backtick fence lines should be stripped from output.
+
+For example:
+  (agent-shell--tool-call-normalize-output \"```elisp\\n(+ 1 2)\\n```\")
+    => \"(+ 1 2)\\n\""
+  ;; Plain fence
+  (should (equal (agent-shell--tool-call-normalize-output "```\nhello\n```")
+                 "hello\n"))
+  ;; Fence with language
+  (should (equal (agent-shell--tool-call-normalize-output "```elisp\n(+ 1 2)\n```")
+                 "(+ 1 2)\n"))
+  ;; Fence with leading whitespace
+  (should (equal (agent-shell--tool-call-normalize-output "  ```\nindented\n  ```")
+                 "indented\n"))
+  ;; Non-fence backticks preserved
+  (should (string-match-p "`inline`"
+                          (agent-shell--tool-call-normalize-output "`inline` code\n"))))
+
 (ert-deftest agent-shell--tool-call-normalize-output-trailing-newline-test ()
   "Normalized output should always end with a newline."
   (should (string-suffix-p "\n" (agent-shell--tool-call-normalize-output "hello")))

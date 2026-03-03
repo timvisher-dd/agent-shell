@@ -69,7 +69,7 @@ For example:
   (when (and text (stringp text))
     (let* ((lines (split-string text "\n"))
            (filtered (seq-remove (lambda (line)
-                                   (string-match-p "`\\s-*```" line))
+                                   (string-match-p "\\`\\s-*```" line))
                                  lines))
            (result (string-join filtered "\n")))
       (when (string-match-p "<persisted-output>" result)
