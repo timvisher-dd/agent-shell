@@ -468,5 +468,49 @@ Upstream updates labels on every tool_call_update, not just final."
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
+(ert-deftest agent-shell--tool-call-command-block-in-body-test ()
+  "Completed execute tool call must show saved command as fenced console block.
+Upstream commit 75cc736 prepends a ```console block to the body when the
+tool call has a saved :command.  Verify the fenced block appears."
+  (let* ((buffer (get-buffer-create " *agent-shell-cmd-block*"))
+         (agent-shell--state (agent-shell--make-state :buffer buffer))
+         (tool-id "toolu_cmd_block"))
+    (map-put! agent-shell--state :client 'test-client)
+    (map-put! agent-shell--state :request-count 1)
+    (map-put! agent-shell--state :active-request t)
+    (with-current-buffer buffer
+      (erase-buffer)
+      (agent-shell-mode))
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
+                   (cl-function (lambda (&key acp-tool-call) (ignore acp-tool-call)))))
+          (with-current-buffer buffer
+            ;; tool_call (pending) with rawInput command
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :acp-notification `((method . "session/update")
+                             (params . ((update
+                                         . ((toolCallId . ,tool-id)
+                                            (sessionUpdate . "tool_call")
+                                            (rawInput (command . "echo hello world"))
+                                            (status . "pending")
+                                            (title . "Bash")
+                                            (kind . "execute")))))))
+            ;; tool_call_update (completed) with output
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :acp-notification `((method . "session/update")
+                             (params . ((update
+                                         . ((toolCallId . ,tool-id)
+                                            (sessionUpdate . "tool_call_update")
+                                            (status . "completed")
+                                            (content . [((content . ((text . "hello world"))))])))))))
+            ;; Buffer must contain the fenced console command block
+            (let ((buf-text (buffer-substring-no-properties (point-min) (point-max))))
+              (should (string-match-p "```console" buf-text))
+              (should (string-match-p "echo hello world" buf-text)))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 (provide 'agent-shell-streaming-tests)
 ;;; agent-shell-streaming-tests.el ends here
