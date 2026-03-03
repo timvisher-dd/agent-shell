@@ -283,6 +283,12 @@ Three cond branches:
      state
      tool-call-id
      (agent-shell--tool-call-update-overrides state update nil nil))
+    ;; Accumulate meta-response before final rendering so output is
+    ;; available even when stdout arrives only on the final update.
+    (when meta-response
+      (let ((chunk (agent-shell--tool-call-normalize-output meta-response)))
+        (when (and chunk (not (string-empty-p chunk)))
+          (agent-shell--tool-call-append-output-chunk state tool-call-id chunk))))
     (cond
      ;; Terminal output data (e.g. codex-acp): accumulate and stream live.
      ((and terminal-data (stringp terminal-data))
@@ -294,11 +300,6 @@ Three cond branches:
       (when final
         (agent-shell--handle-tool-call-final state update)
         (agent-shell--tool-call-clear-output state tool-call-id)))
-     ;; Non-final meta toolResponse: accumulate only, render on final.
-     ((and meta-response (not final))
-      (let ((chunk (agent-shell--tool-call-normalize-output meta-response)))
-        (when (and chunk (not (string-empty-p chunk)))
-          (agent-shell--tool-call-append-output-chunk state tool-call-id chunk))))
      (final
       (agent-shell--handle-tool-call-final state update)))
     ;; Update labels for non-final updates (final gets labels via
