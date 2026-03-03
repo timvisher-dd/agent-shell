@@ -354,14 +354,19 @@ back to content-text extraction."
       (when (and .status
                  (not (equal .status "pending")))
         (agent-shell--delete-fragment :state state :block-id (format "permission-%s" .toolCallId)))
-      (let ((tool-call-labels (agent-shell-make-tool-call-label
-                               state .toolCallId)))
+      (let* ((tool-call-labels (agent-shell-make-tool-call-label
+                                state .toolCallId))
+             (saved-command (map-nested-elt state `(:tool-calls ,.toolCallId :command)))
+             (command-block (when saved-command
+                              (concat "```console\n" saved-command "\n```"))))
         (agent-shell--update-fragment
          :state state
          :block-id .toolCallId
          :label-left (map-elt tool-call-labels :status)
          :label-right (map-elt tool-call-labels :title)
-         :body (string-trim body-text)
+         :body (if command-block
+                   (concat command-block "\n\n" (string-trim body-text))
+                 (string-trim body-text))
          :expanded agent-shell-tool-use-expand-by-default))
       (agent-shell--tool-call-clear-output state .toolCallId))))
 
