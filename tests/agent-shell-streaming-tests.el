@@ -41,14 +41,13 @@
          (agent-shell--state (agent-shell--make-state :buffer buffer)))
     (map-put! agent-shell--state :client 'test-client)
     (map-put! agent-shell--state :request-count 1)
+    (map-put! agent-shell--state :active-request t)
     (with-current-buffer buffer
       (erase-buffer)
       (agent-shell-mode))
     (unwind-protect
         (cl-letf (((symbol-function 'agent-shell--make-diff-info)
-                   (cl-function (lambda (&key acp-tool-call) (ignore acp-tool-call))))
-                  ((symbol-function 'shell-maker-busy)
-                   (lambda () t)))
+                   (cl-function (lambda (&key acp-tool-call) (ignore acp-tool-call)))))
           (with-current-buffer buffer
             (agent-shell--on-notification
              :state agent-shell--state
@@ -73,14 +72,13 @@ Simplified replay without terminal notifications: sends tool_call
          (stdout-text "line 0\nline 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9"))
     (map-put! agent-shell--state :client 'test-client)
     (map-put! agent-shell--state :request-count 1)
+    (map-put! agent-shell--state :active-request t)
     (with-current-buffer buffer
       (erase-buffer)
       (agent-shell-mode))
     (unwind-protect
         (cl-letf (((symbol-function 'agent-shell--make-diff-info)
-                   (cl-function (lambda (&key acp-tool-call) (ignore acp-tool-call))))
-                  ((symbol-function 'shell-maker-busy)
-                   (lambda () t)))
+                   (cl-function (lambda (&key acp-tool-call) (ignore acp-tool-call)))))
           (with-current-buffer buffer
             ;; Notification 1: tool_call (pending)
             (agent-shell--on-notification
@@ -160,14 +158,13 @@ incremental terminal_output.data chunks, then completed update."
 (tool-id "call_codex_test"))
 (map-put! agent-shell--state :client 'test-client)
 (map-put! agent-shell--state :request-count 1)
+(map-put! agent-shell--state :active-request t)
 (with-current-buffer buffer
 (erase-buffer)
 (agent-shell-mode))
 (unwind-protect
 (cl-letf (((symbol-function 'agent-shell--make-diff-info)
-(cl-function (lambda (&key acp-tool-call) (ignore acp-tool-call))))
-((symbol-function 'shell-maker-busy)
-(lambda () t)))
+(cl-function (lambda (&key acp-tool-call) (ignore acp-tool-call)))))
 (with-current-buffer buffer
 ;; Notification 1: tool_call (in_progress, terminal content)
 (agent-shell--on-notification
@@ -263,12 +260,12 @@ a cumulative re-delivery of the complete thought text."
          (thought-text "**Checking beads**\n\nLooking for .beads directory."))
     (map-put! agent-shell--state :client 'test-client)
     (map-put! agent-shell--state :request-count 1)
+    (map-put! agent-shell--state :active-request t)
     (with-current-buffer buffer
       (erase-buffer)
       (agent-shell-mode))
     (unwind-protect
-        (cl-letf (((symbol-function 'shell-maker-busy)
-                   (lambda () t)))
+        (cl-letf ()
           (with-current-buffer buffer
             ;; Send incremental tokens
             (dolist (token (list "\n\n" "**Checking" " beads**" "\n\n"
@@ -384,14 +381,13 @@ verifies the buffer contains the done label, not wait."
          (tool-id "toolu_label_done"))
     (map-put! agent-shell--state :client 'test-client)
     (map-put! agent-shell--state :request-count 1)
+    (map-put! agent-shell--state :active-request t)
     (with-current-buffer buffer
       (erase-buffer)
       (agent-shell-mode))
     (unwind-protect
         (cl-letf (((symbol-function 'agent-shell--make-diff-info)
-                   (cl-function (lambda (&key acp-tool-call) (ignore acp-tool-call))))
-                  ((symbol-function 'shell-maker-busy)
-                   (lambda () t)))
+                   (cl-function (lambda (&key acp-tool-call) (ignore acp-tool-call)))))
           (with-current-buffer buffer
             ;; tool_call (pending)
             (agent-shell--on-notification
@@ -431,14 +427,13 @@ Upstream updates labels on every tool_call_update, not just final."
          (tool-id "toolu_label_busy"))
     (map-put! agent-shell--state :client 'test-client)
     (map-put! agent-shell--state :request-count 1)
+    (map-put! agent-shell--state :active-request t)
     (with-current-buffer buffer
       (erase-buffer)
       (agent-shell-mode))
     (unwind-protect
         (cl-letf (((symbol-function 'agent-shell--make-diff-info)
-                   (cl-function (lambda (&key acp-tool-call) (ignore acp-tool-call))))
-                  ((symbol-function 'shell-maker-busy)
-                   (lambda () t)))
+                   (cl-function (lambda (&key acp-tool-call) (ignore acp-tool-call)))))
           (with-current-buffer buffer
             ;; tool_call (pending)
             (agent-shell--on-notification
