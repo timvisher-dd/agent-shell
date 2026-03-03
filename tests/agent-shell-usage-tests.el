@@ -1,6 +1,7 @@
 ;;; agent-shell-usage-tests.el --- Tests for usage tracking -*- lexical-binding: t; -*-
 
 (require 'ert)
+(require 'cl-lib)
 (require 'map)
 
 ;; Load agent-shell-usage without pulling in the full agent-shell dependency tree.
@@ -25,10 +26,12 @@
                     (cons :cost-amount 0.0)
                     (cons :cost-currency nil)))))
 
-;; Stub the state accessor to return the buffer-local variable directly.
-(defun agent-shell--state ()
-  "Test stub: return the state variable without mode checks."
-  agent-shell--state)
+(defmacro agent-shell-usage-tests--with-stub (&rest body)
+  "Evaluate BODY with `agent-shell--state' stubbed to return the variable."
+  (declare (indent 0) (debug body))
+  `(cl-letf (((symbol-function 'agent-shell--state)
+              (lambda () agent-shell--state)))
+     ,@body))
 
 ;; ============================================================
 ;; agent-shell--update-usage-from-notification
@@ -88,79 +91,87 @@
   "Low usage (< 60%) shows green."
   (let ((agent-shell-show-context-usage-indicator t)
         (agent-shell--state (agent-shell-usage-tests--make-state 50000 200000)))
-    (let ((indicator (agent-shell--context-usage-indicator)))
-      (should indicator)
-      (should (equal 'success (get-text-property 0 'face indicator))))))
+    (agent-shell-usage-tests--with-stub
+      (let ((indicator (agent-shell--context-usage-indicator)))
+        (should indicator)
+        (should (equal 'success (get-text-property 0 'face indicator)))))))
 
 (ert-deftest agent-shell-usage--indicator-medium-usage-warning ()
   "Medium usage (60-84%) shows warning."
   (let ((agent-shell-show-context-usage-indicator t)
         (agent-shell--state (agent-shell-usage-tests--make-state 140000 200000)))
-    (let ((indicator (agent-shell--context-usage-indicator)))
-      (should indicator)
-      (should (equal 'warning (get-text-property 0 'face indicator))))))
+    (agent-shell-usage-tests--with-stub
+      (let ((indicator (agent-shell--context-usage-indicator)))
+        (should indicator)
+        (should (equal 'warning (get-text-property 0 'face indicator)))))))
 
 (ert-deftest agent-shell-usage--indicator-high-usage-error ()
   "High usage (>= 85%) shows error/red."
   (let ((agent-shell-show-context-usage-indicator t)
         (agent-shell--state (agent-shell-usage-tests--make-state 180000 200000)))
-    (let ((indicator (agent-shell--context-usage-indicator)))
-      (should indicator)
-      (should (equal 'error (get-text-property 0 'face indicator))))))
+    (agent-shell-usage-tests--with-stub
+      (let ((indicator (agent-shell--context-usage-indicator)))
+        (should indicator)
+        (should (equal 'error (get-text-property 0 'face indicator)))))))
 
 (ert-deftest agent-shell-usage--indicator-resets-after-compaction ()
   "Indicator reflects the lower usage after compaction."
   (let ((agent-shell-show-context-usage-indicator t)
         (agent-shell--state (agent-shell-usage-tests--make-state 965200 1000000)))
-    ;; Pre-compaction: red
-    (should (equal 'error
-                   (get-text-property 0 'face (agent-shell--context-usage-indicator))))
-    ;; Compaction
-    (agent-shell--update-usage-from-notification
-     :state agent-shell--state
-     :acp-update '((used . 24095) (size . 1000000)))
-    ;; Post-compaction: green, smallest block
-    (let ((indicator (agent-shell--context-usage-indicator)))
-      (should (equal 'success (get-text-property 0 'face indicator)))
-      (should (equal "▁" (substring-no-properties indicator))))))
+    (agent-shell-usage-tests--with-stub
+      ;; Pre-compaction: red
+      (should (equal 'error
+                     (get-text-property 0 'face (agent-shell--context-usage-indicator))))
+      ;; Compaction
+      (agent-shell--update-usage-from-notification
+       :state agent-shell--state
+       :acp-update '((used . 24095) (size . 1000000)))
+      ;; Post-compaction: green, smallest block
+      (let ((indicator (agent-shell--context-usage-indicator)))
+        (should (equal 'success (get-text-property 0 'face indicator)))
+        (should (equal "▁" (substring-no-properties indicator)))))))
 
 (ert-deftest agent-shell-usage--indicator-block-characters-scale ()
   "Block characters scale with usage percentage."
   (let ((agent-shell-show-context-usage-indicator t))
-    (let ((agent-shell--state (agent-shell-usage-tests--make-state 100000 1000000)))
-      (should (equal "▁" (substring-no-properties (agent-shell--context-usage-indicator)))))
-    (let ((agent-shell--state (agent-shell-usage-tests--make-state 300000 1000000)))
-      (should (equal "▂" (substring-no-properties (agent-shell--context-usage-indicator)))))
-    (let ((agent-shell--state (agent-shell-usage-tests--make-state 400000 1000000)))
-      (should (equal "▃" (substring-no-properties (agent-shell--context-usage-indicator)))))
-    (let ((agent-shell--state (agent-shell-usage-tests--make-state 550000 1000000)))
-      (should (equal "▄" (substring-no-properties (agent-shell--context-usage-indicator)))))
-    (let ((agent-shell--state (agent-shell-usage-tests--make-state 650000 1000000)))
-      (should (equal "▅" (substring-no-properties (agent-shell--context-usage-indicator)))))
-    (let ((agent-shell--state (agent-shell-usage-tests--make-state 800000 1000000)))
-      (should (equal "▆" (substring-no-properties (agent-shell--context-usage-indicator)))))
-    (let ((agent-shell--state (agent-shell-usage-tests--make-state 900000 1000000)))
-      (should (equal "▇" (substring-no-properties (agent-shell--context-usage-indicator)))))
-    (let ((agent-shell--state (agent-shell-usage-tests--make-state 1000000 1000000)))
-      (should (equal "█" (substring-no-properties (agent-shell--context-usage-indicator)))))))
+    (agent-shell-usage-tests--with-stub
+      (let ((agent-shell--state (agent-shell-usage-tests--make-state 100000 1000000)))
+        (should (equal "▁" (substring-no-properties (agent-shell--context-usage-indicator)))))
+      (let ((agent-shell--state (agent-shell-usage-tests--make-state 300000 1000000)))
+        (should (equal "▂" (substring-no-properties (agent-shell--context-usage-indicator)))))
+      (let ((agent-shell--state (agent-shell-usage-tests--make-state 400000 1000000)))
+        (should (equal "▃" (substring-no-properties (agent-shell--context-usage-indicator)))))
+      (let ((agent-shell--state (agent-shell-usage-tests--make-state 550000 1000000)))
+        (should (equal "▄" (substring-no-properties (agent-shell--context-usage-indicator)))))
+      (let ((agent-shell--state (agent-shell-usage-tests--make-state 650000 1000000)))
+        (should (equal "▅" (substring-no-properties (agent-shell--context-usage-indicator)))))
+      (let ((agent-shell--state (agent-shell-usage-tests--make-state 800000 1000000)))
+        (should (equal "▆" (substring-no-properties (agent-shell--context-usage-indicator)))))
+      (let ((agent-shell--state (agent-shell-usage-tests--make-state 900000 1000000)))
+        (should (equal "▇" (substring-no-properties (agent-shell--context-usage-indicator)))))
+      (let ((agent-shell--state (agent-shell-usage-tests--make-state 1000000 1000000)))
+        (should (equal "█" (substring-no-properties (agent-shell--context-usage-indicator))))))))
 
 (ert-deftest agent-shell-usage--indicator-nil-when-disabled ()
-  "Returns nil when the indicator is disabled."
+  "Return nil when the indicator is disabled."
   (let ((agent-shell-show-context-usage-indicator nil)
         (agent-shell--state (agent-shell-usage-tests--make-state 500000 1000000)))
-    (should-not (agent-shell--context-usage-indicator))))
+    (agent-shell-usage-tests--with-stub
+      (should-not (agent-shell--context-usage-indicator)))))
 
 (ert-deftest agent-shell-usage--indicator-nil-when-no-data ()
-  "Returns nil when context-size is 0."
+  "Return nil when context-size is 0."
   (let ((agent-shell-show-context-usage-indicator t)
         (agent-shell--state (agent-shell-usage-tests--make-state 0 0)))
-    (should-not (agent-shell--context-usage-indicator))))
+    (agent-shell-usage-tests--with-stub
+      (should-not (agent-shell--context-usage-indicator)))))
 
 (ert-deftest agent-shell-usage--indicator-nil-when-zero-usage ()
-  "Returns nil when context-used is 0."
+  "Return nil when context-used is 0."
   (let ((agent-shell-show-context-usage-indicator t)
         (agent-shell--state (agent-shell-usage-tests--make-state 0 1000000)))
-    (should-not (agent-shell--context-usage-indicator))))
+    (agent-shell-usage-tests--with-stub
+      (should-not (agent-shell--context-usage-indicator)))))
 
 ;; ============================================================
 ;; Full compaction replay from observed ACP traffic
@@ -188,9 +199,10 @@
     (should (equal 262548 (map-elt (map-elt agent-shell--state :usage) :context-used)))
     (should (equal 1000000 (map-elt (map-elt agent-shell--state :usage) :context-size)))
     ;; Indicator: green, ▂ for 26.3%
-    (let ((indicator (agent-shell--context-usage-indicator)))
-      (should (equal 'success (get-text-property 0 'face indicator)))
-      (should (equal "▂" (substring-no-properties indicator))))))
+    (agent-shell-usage-tests--with-stub
+      (let ((indicator (agent-shell--context-usage-indicator)))
+        (should (equal 'success (get-text-property 0 'face indicator)))
+        (should (equal "▂" (substring-no-properties indicator)))))))
 
 ;; ============================================================
 ;; agent-shell--save-usage (PromptResponse tokens)
