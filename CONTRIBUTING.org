@@ -217,3 +217,17 @@ Tests live under the tests directory:
 Opening any file under the =tests= directory will load the =agent-shell-run-all-tests= command.
 
 Run tests with =M-x agent-shell-run-all-tests=.
+
+*** From the command line
+
+=bin/test= runs the full ERT suite in batch mode.  It requires two
+environment variables pointing to local checkouts of the dependencies:
+
+#+begin_src bash
+  shell_maker_checkout=~/path/to/shell-maker \
+  acp_checkout=~/path/to/acp.el \
+    bin/test
+#+end_src
+
+Both variables are mandatory; the script will exit with a descriptive
+error if either is missing.
