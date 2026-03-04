@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+
+: "${shell_maker_checkout:?Set shell_maker_checkout to your shell-maker checkout (e.g. ~/git/xenodium/shell-maker/main)}"
+: "${acp_checkout:?Set acp_checkout to your acp.el checkout (e.g. ~/git/timvisher-dd/acp.el/dev)}"
+
+test_files=()
+for f in "$root"/tests/*-tests.el; do
+  test_files+=(-l "$f")
+done
+
+exec emacs --batch -Q \
+  --eval "(setq load-prefer-newer 't)" \
+  -L "$root" \
+  -L "$root/tests" \
+  -L "$shell_maker_checkout" \
+  -L "$acp_checkout" \
+  "${test_files[@]}" \
+  -f ert-run-tests-batch-and-exit
