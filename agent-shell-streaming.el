@@ -67,11 +67,10 @@ For example:
    \"<persisted-output>saved</persisted-output>\")
     => fontified string with tags stripped"
   (when (and text (stringp text))
-    (let* ((lines (split-string text "\n"))
-           (filtered (seq-remove (lambda (line)
-                                   (string-match-p "\\`\\s-*```" line))
-                                 lines))
-           (result (string-join filtered "\n")))
+    (let ((result (string-join (seq-remove (lambda (line)
+                                             (string-match-p "\\`\\s-*```" line))
+                                           (split-string text "\n"))
+                               "\n")))
       (when (string-match-p "<persisted-output>" result)
         (setq result (replace-regexp-in-string
                       "</?persisted-output>" "" result))
@@ -120,7 +119,7 @@ For example:
   "Return aggregated output for TOOL-CALL-ID from STATE."
   (let ((chunks (map-nested-elt state `(:tool-calls ,tool-call-id :output-chunks))))
     (when (and chunks (listp chunks))
-      (mapconcat #'identity (nreverse (copy-sequence chunks)) ""))))
+      (mapconcat #'identity (reverse chunks) ""))))
 
 (defun agent-shell--tool-call-clear-output (state tool-call-id)
   "Clear aggregated output for TOOL-CALL-ID in STATE."
@@ -162,7 +161,7 @@ For example:
   (when-let ((buffer (map-elt state :buffer)))
     (with-current-buffer buffer
       (let* ((qualified-id (format "%s-%s" (map-elt state :request-count) tool-call-id))
-             (match (save-mark-and-excursion
+             (match (save-excursion
                       (goto-char (point-max))
                       (text-property-search-backward
                        'agent-shell-ui-state nil
@@ -194,6 +193,16 @@ For example:
         (agent-shell--tool-call-set-output-ui-state state tool-call-id (map-elt info :ui-state))))
     marker))
 
+(defun agent-shell--store-tool-call-output (ui-state text)
+  "Store TEXT in the content-store for UI-STATE's body key."
+  (when-let ((qualified-id (map-elt ui-state :qualified-id))
+             (key (concat qualified-id "-body")))
+    (unless agent-shell-ui--content-store
+      (setq agent-shell-ui--content-store (make-hash-table :test 'equal)))
+    (puthash key
+             (concat (or (gethash key agent-shell-ui--content-store) "") text)
+             agent-shell-ui--content-store)))
+
 (defun agent-shell--append-tool-call-output (state tool-call-id text)
   "Append TEXT to TOOL-CALL-ID output body in STATE without formatting."
   (when (and text (not (string-empty-p text)))
@@ -203,17 +212,7 @@ For example:
              (was-at-end (eobp))
              (saved-point (copy-marker (point) t))
              (marker (agent-shell--tool-call-ensure-output-marker state tool-call-id))
-             (ui-state (agent-shell--tool-call-output-ui-state state tool-call-id))
-             (store-output (lambda (state)
-                             (when state
-                               (let* ((qualified-id (map-elt state :qualified-id))
-                                      (key (and qualified-id (concat qualified-id "-body"))))
-                                 (when key
-                                   (unless agent-shell-ui--content-store
-                                     (setq agent-shell-ui--content-store (make-hash-table :test 'equal)))
-                                   (puthash key
-                                            (concat (or (gethash key agent-shell-ui--content-store) "") text)
-                                            agent-shell-ui--content-store)))))))
+             (ui-state (agent-shell--tool-call-output-ui-state state tool-call-id)))
         (if (not marker)
             (progn
               (agent-shell--update-fragment
@@ -224,7 +223,7 @@ For example:
                :navigation 'always)
               (agent-shell--tool-call-ensure-output-marker state tool-call-id)
               (setq ui-state (agent-shell--tool-call-output-ui-state state tool-call-id))
-              (funcall store-output ui-state))
+              (agent-shell--store-tool-call-output ui-state text))
           (goto-char marker)
           (let ((start (point)))
             (insert text)
@@ -237,7 +236,7 @@ For example:
                 'read-only t
                 'front-sticky '(read-only)
                 'agent-shell-ui-state ui-state))
-              (funcall store-output ui-state)
+              (agent-shell--store-tool-call-output ui-state text)
               (when collapsed
                 (add-text-properties start end '(invisible t))))))
         (if was-at-end

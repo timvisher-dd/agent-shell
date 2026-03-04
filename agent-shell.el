@@ -329,14 +329,12 @@ Can be one of:
                  (const :tag "No header" nil))
   :group 'agent-shell)
 
-(defcustom agent-shell-show-session-id nil
+(defvar agent-shell-show-session-id nil
   "Non-nil to display the session ID in the header and session selection.
 
 When enabled, the session ID is shown after the directory path in the
 header and as an additional column in the session selection prompt.
-Only appears when a session is active."
-  :type 'boolean
-  :group 'agent-shell)
+Only appears when a session is active.")
 
 (defcustom agent-shell-show-welcome-message t
   "Non-nil to show welcome message."
@@ -2627,6 +2625,25 @@ variable (see makunbound)"))
       (error "Editing the wrong buffer: %s" (current-buffer)))
     (agent-shell-ui-delete-fragment :namespace-id (map-elt state :request-count) :block-id block-id :no-undo t)))
 
+(defmacro agent-shell--with-preserved-process-mark (&rest body)
+  "Evaluate BODY, then restore the process-mark to its pre-BODY position.
+Prevents `shell-maker-with-auto-scroll-edit' from dragging the
+process-mark past pending input (e.g. context text at the prompt)."
+  (declare (indent 0) (debug body))
+  (let ((proc-sym (make-symbol "proc"))
+        (saved-sym (make-symbol "saved-pmark")))
+    `(let* ((,proc-sym (get-buffer-process (current-buffer)))
+            (,saved-sym (when ,proc-sym
+                          (copy-marker (process-mark ,proc-sym)))))
+       (unwind-protect
+           (progn ,@body)
+         (when ,saved-sym
+           (set-marker (process-mark ,proc-sym) ,saved-sym)
+           (set-marker ,saved-sym nil))))))
+
+(defvar agent-shell--markdown-overlay-debounce-delay 0.15
+  "Idle time in seconds before applying markdown overlays during streaming.")
+
 (defvar-local agent-shell--markdown-overlay-timer nil
   "Idle timer for debounced markdown overlay processing.")
 
@@ -2655,7 +2672,7 @@ Cancels any pending timer so only the latest range is processed."
       (cancel-timer agent-shell--markdown-overlay-timer))
     (setq agent-shell--markdown-overlay-timer
           (run-with-idle-timer
-           0.15 nil
+           agent-shell--markdown-overlay-debounce-delay nil
            (lambda ()
              (when (buffer-live-p buffer)
                (with-current-buffer buffer
@@ -2755,14 +2772,7 @@ by default, RENDER-BODY-IMAGES to enable inline image rendering in body."
                  (equal (current-buffer)
                         (map-elt state :buffer)))
       (error "Editing the wrong buffer: %s" (current-buffer)))
-    ;; Save process-mark so shell-maker-with-auto-scroll-edit does not
-    ;; drag it past any pending input (e.g. context text inserted by
-    ;; agent-shell--insert-to-shell-buffer at the prompt).  Fragment
-    ;; updates only touch the output area above the prompt, so the
-    ;; process-mark should stay where it was.
-    (let* ((proc (get-buffer-process (current-buffer)))
-           (saved-pmark (when proc
-                          (copy-marker (process-mark proc)))))
+    (agent-shell--with-preserved-process-mark
       (shell-maker-with-auto-scroll-edit
        (when-let* ((range (agent-shell-ui-update-fragment
                          (agent-shell-ui-make-fragment-model
@@ -2796,10 +2806,7 @@ by default, RENDER-BODY-IMAGES to enable inline image rendering in body."
                (agent-shell--schedule-markdown-overlays
                 (current-buffer) range)
              (agent-shell--apply-markdown-overlays range))))
-       (run-hook-with-args 'agent-shell-section-functions range)))
-      (when saved-pmark
-        (set-marker (process-mark proc) saved-pmark)
-        (set-marker saved-pmark nil)))))
+       (run-hook-with-args 'agent-shell-section-functions range))))))
 
 (cl-defun agent-shell--update-text (&key state namespace-id block-id text append create-new)
   "Update plain text entry in the shell buffer.
@@ -2825,9 +2832,7 @@ APPEND and CREATE-NEW control update behavior."
            :create-new create-new
            :no-undo t))))
     (with-current-buffer (map-elt state :buffer)
-      (let* ((proc (get-buffer-process (current-buffer)))
-             (saved-pmark (when proc
-                            (copy-marker (process-mark proc)))))
+      (agent-shell--with-preserved-process-mark
         (shell-maker-with-auto-scroll-edit
          (when-let* ((range (agent-shell-ui-update-text
                              :namespace-id ns
@@ -2839,10 +2844,7 @@ APPEND and CREATE-NEW control update behavior."
                      (block-start (map-nested-elt range '(:block :start)))
                      (block-end (map-nested-elt range '(:block :end))))
            (let ((inhibit-read-only t))
-             (add-text-properties block-start block-end '(field output)))))
-        (when saved-pmark
-          (set-marker (process-mark proc) saved-pmark)
-          (set-marker saved-pmark nil))))))
+             (add-text-properties block-start block-end '(field output)))))))))
 
 (defun agent-shell-toggle-logging ()
   "Toggle logging."

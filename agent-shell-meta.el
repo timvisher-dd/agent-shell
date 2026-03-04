@@ -26,9 +26,8 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl-lib))
 (require 'map)
+(require 'seq)
 (require 'subr-x)
 
 (defun agent-shell--meta-lookup (meta key)
@@ -57,17 +56,12 @@ For example:
   (agent-shell--meta-find-tool-response
    \\='((claudeCode . ((toolResponse . ((stdout . \"hi\")))))))
     => ((stdout . \"hi\"))"
-  (let ((found nil))
-    (cond
-     ((setq found (agent-shell--meta-lookup meta 'toolResponse))
-      found)
-     (t
-      (cl-loop for entry in (when (listp meta) meta)
-               for value = (cond
-                            ((and (consp entry) (consp (cdr entry)))
-                             (agent-shell--meta-lookup (cdr entry) 'toolResponse))
-			    )
-               when value return value)))))
+  (or (agent-shell--meta-lookup meta 'toolResponse)
+      (when-let ((match (seq-find (lambda (entry)
+                                    (and (consp entry) (consp (cdr entry))
+                                         (agent-shell--meta-lookup (cdr entry) 'toolResponse)))
+                                  (when (listp meta) meta))))
+        (agent-shell--meta-lookup (cdr match) 'toolResponse))))
 
 (defun agent-shell--tool-call-meta-response-text (update)
   "Return tool response text from UPDATE meta, if present.
