@@ -130,7 +130,7 @@ Simplified replay without terminal notifications: sends tool_call
                              (params . ((update
                                          . ((toolCallId . ,tool-id)
                                             (sessionUpdate . "tool_call_update")
-                                            (status . "completed")))))))))
+                                            (status . "completed"))))))))
           (with-current-buffer buffer
             (let* ((buf-text (buffer-substring-no-properties (point-min) (point-max)))
                    (count-line5 (let ((c 0) (s 0))
@@ -140,7 +140,7 @@ Simplified replay without terminal notifications: sends tool_call
               ;; "line 9" must be present (output was rendered)
               (should (string-match-p "line 9" buf-text))
               ;; "line 5" must appear exactly once (no duplication)
-              (should (= count-line5 1))))
+              (should (= count-line5 1)))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
@@ -169,80 +169,80 @@ toolResponse.stdout streaming updates."
         (kill-buffer buffer)))))
 
 (ert-deftest agent-shell--codex-terminal-output-streams-without-duplication-test ()
-"Codex-acp streams via terminal_output.data; output must not duplicate.
+  "Codex-acp streams via terminal_output.data; output must not duplicate.
 Replays the codex notification pattern: tool_call with terminal content,
 incremental terminal_output.data chunks, then completed update."
-(let* ((buffer (get-buffer-create " *agent-shell-codex-dedup*"))
-(agent-shell--state (agent-shell--make-state :buffer buffer))
-(tool-id "call_codex_test"))
-(map-put! agent-shell--state :client 'test-client)
-(map-put! agent-shell--state :request-count 1)
-(map-put! agent-shell--state :active-request t)
-(with-current-buffer buffer
-(erase-buffer)
-(agent-shell-mode))
-(unwind-protect
-(cl-letf (((symbol-function 'agent-shell--make-diff-info)
-(cl-function (lambda (&key acp-tool-call) (ignore acp-tool-call)))))
-(with-current-buffer buffer
-;; Notification 1: tool_call (in_progress, terminal content)
-(agent-shell--on-notification
-:state agent-shell--state
-:acp-notification `((method . "session/update")
-(params . ((update
-. ((sessionUpdate . "tool_call")
-(toolCallId . ,tool-id)
-(title . "Run echo test")
-(kind . "execute")
-(status . "in_progress")
-(content . [((type . "terminal")
-(terminalId . ,tool-id))])
-(_meta (terminal_info
-(terminal_id . ,tool-id)))))))))
-;; Notification 2: first terminal_output.data chunk
-(agent-shell--on-notification
-:state agent-shell--state
-:acp-notification `((method . "session/update")
-(params . ((update
-. ((sessionUpdate . "tool_call_update")
-(toolCallId . ,tool-id)
-(_meta (terminal_output
-(terminal_id . ,tool-id)
-(data . "alpha\n")))))))))
-;; Notification 3: second terminal_output.data chunk
-(agent-shell--on-notification
-:state agent-shell--state
-:acp-notification `((method . "session/update")
-(params . ((update
-. ((sessionUpdate . "tool_call_update")
-(toolCallId . ,tool-id)
-(_meta (terminal_output
-(terminal_id . ,tool-id)
-(data . "bravo\n")))))))))
-;; Notification 4: completed
-(agent-shell--on-notification
-:state agent-shell--state
-:acp-notification `((method . "session/update")
-(params . ((update
-. ((sessionUpdate . "tool_call_update")
-(toolCallId . ,tool-id)
-(status . "completed")
-(_meta (terminal_exit
-(terminal_id . ,tool-id)
-(exit_code . 0)))))))))))
-(with-current-buffer buffer
-(let* ((buf-text (buffer-substring-no-properties (point-min) (point-max)))
-(count-alpha (let ((c 0) (s 0))
-(while (string-match "alpha" buf-text s)
-(setq c (1+ c) s (match-end 0)))
-c)))
-;; Both chunks rendered
-(should (string-match-p "alpha" buf-text))
-(should (string-match-p "bravo" buf-text))
-;; No duplication
-(should (= count-alpha 1))))
-(when (buffer-live-p buffer)
-  (kill-buffer buffer)))))
+  (let* ((buffer (get-buffer-create " *agent-shell-codex-dedup*"))
+         (agent-shell--state (agent-shell--make-state :buffer buffer))
+         (tool-id "call_codex_test"))
+    (map-put! agent-shell--state :client 'test-client)
+    (map-put! agent-shell--state :request-count 1)
+    (map-put! agent-shell--state :active-request t)
+    (with-current-buffer buffer
+      (erase-buffer)
+      (agent-shell-mode))
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
+                   (cl-function (lambda (&key acp-tool-call) (ignore acp-tool-call)))))
+          (with-current-buffer buffer
+            ;; Notification 1: tool_call (in_progress, terminal content)
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :acp-notification `((method . "session/update")
+                             (params . ((update
+                                         . ((sessionUpdate . "tool_call")
+                                            (toolCallId . ,tool-id)
+                                            (title . "Run echo test")
+                                            (kind . "execute")
+                                            (status . "in_progress")
+                                            (content . [((type . "terminal")
+                                                         (terminalId . ,tool-id))])
+                                            (_meta (terminal_info
+                                                    (terminal_id . ,tool-id)))))))))
+            ;; Notification 2: first terminal_output.data chunk
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :acp-notification `((method . "session/update")
+                             (params . ((update
+                                         . ((sessionUpdate . "tool_call_update")
+                                            (toolCallId . ,tool-id)
+                                            (_meta (terminal_output
+                                                    (terminal_id . ,tool-id)
+                                                    (data . "alpha\n")))))))))
+            ;; Notification 3: second terminal_output.data chunk
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :acp-notification `((method . "session/update")
+                             (params . ((update
+                                         . ((sessionUpdate . "tool_call_update")
+                                            (toolCallId . ,tool-id)
+                                            (_meta (terminal_output
+                                                    (terminal_id . ,tool-id)
+                                                    (data . "bravo\n")))))))))
+            ;; Notification 4: completed
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :acp-notification `((method . "session/update")
+                             (params . ((update
+                                         . ((sessionUpdate . "tool_call_update")
+                                            (toolCallId . ,tool-id)
+                                            (status . "completed")
+                                            (_meta (terminal_exit
+                                                    (terminal_id . ,tool-id)
+                                                    (exit_code . 0)))))))))))
+          (with-current-buffer buffer
+            (let* ((buf-text (buffer-substring-no-properties (point-min) (point-max)))
+                   (count-alpha (let ((c 0) (s 0))
+                                  (while (string-match "alpha" buf-text s)
+                                    (setq c (1+ c) s (match-end 0)))
+                                  c)))
+              ;; Both chunks rendered
+              (should (string-match-p "alpha" buf-text))
+              (should (string-match-p "bravo" buf-text))
+              ;; No duplication
+              (should (= count-alpha 1))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
 
 
 ;;; Thought chunk dedup tests

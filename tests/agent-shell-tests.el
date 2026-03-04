@@ -1433,17 +1433,16 @@ code block content
 (ert-deftest agent-shell--outgoing-request-decorator-reaches-client ()
   "Test that :outgoing-request-decorator from state reaches the ACP client."
   (with-temp-buffer
-    (let* ((my-decorator (lambda (request) request))
-           (agent-shell--state (agent-shell--make-state
-                                :agent-config nil
-                                :buffer (current-buffer)
-                                :client-maker (lambda (_buffer)
-                                                (agent-shell--make-acp-client
-                                                 :command "cat"
-                                                 :context-buffer (current-buffer)))
-                                :outgoing-request-decorator my-decorator)))
-      ;; setq-local needed for buffer-local-value in agent-shell--make-acp-client
-      (setq-local agent-shell--state agent-shell--state)
+    (let ((my-decorator (lambda (request) request)))
+      (setq-local agent-shell--state
+                  (agent-shell--make-state
+                   :agent-config nil
+                   :buffer (current-buffer)
+                   :client-maker (lambda (_buffer)
+                                   (agent-shell--make-acp-client
+                                    :command "cat"
+                                    :context-buffer (current-buffer)))
+                   :outgoing-request-decorator my-decorator))
       (let ((client (funcall (map-elt agent-shell--state :client-maker)
                              (current-buffer))))
         (should (eq (map-elt client :outgoing-request-decorator) my-decorator))))))
@@ -1457,16 +1456,16 @@ code block content
                           (map-put! request :params
                                     (cons '(_meta . ((systemPrompt . ((append . "extra instructions")))))
                                           (map-elt request :params))))
-                        request))
-           (agent-shell--state (agent-shell--make-state
-                                :agent-config nil
-                                :buffer (current-buffer)
-                                :client-maker (lambda (_buffer)
-                                                (agent-shell--make-acp-client
-                                                 :command "cat"
-                                                 :context-buffer (current-buffer)))
-                                :outgoing-request-decorator decorator)))
-      (setq-local agent-shell--state agent-shell--state)
+                        request)))
+      (setq-local agent-shell--state
+                  (agent-shell--make-state
+                   :agent-config nil
+                   :buffer (current-buffer)
+                   :client-maker (lambda (_buffer)
+                                   (agent-shell--make-acp-client
+                                    :command "cat"
+                                    :context-buffer (current-buffer)))
+                   :outgoing-request-decorator decorator))
       (let ((client (funcall (map-elt agent-shell--state :client-maker)
                              (current-buffer))))
         ;; Give client a fake process so acp--request-sender proceeds
@@ -1681,7 +1680,9 @@ code block content
     (cl-letf (((symbol-function 'agent-shell--state)
                (lambda () agent-shell--state))
               ((symbol-function 'derived-mode-p)
-               (lambda (&rest _) t)))
+               (lambda (&rest _) t))
+              ((symbol-function 'message)
+               (lambda (&rest _) nil)))
       (agent-shell-copy-session-id)
       (should (equal (current-kill 0) "test-session-id")))))
 
