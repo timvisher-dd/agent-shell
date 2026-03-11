@@ -145,11 +145,12 @@ When MULTILINE is non-nil, format as right-aligned labeled rows."
           (if (> (or (map-elt usage :context-size) 0) 0)
               (agent-shell--format-number-compact (or (map-elt usage :context-size) 0))
             "?")
-          (if (and (map-elt usage :context-size)
-                   (> (map-elt usage :context-size) 0))
-              (format " (%.1f%%)" (* 100.0 (/ (float (or (map-elt usage :context-used) 0))
-                                              (map-elt usage :context-size))))
-            "")))
+          (let ((used (or (map-elt usage :context-used) 0))
+                (size (or (map-elt usage :context-size) 0)))
+            (cond
+             ((< size used) " (?)")
+             ((< 0 size) (format " (%.1f%%)" (* 100.0 (/ (float used) size))))
+             (t "")))))
         (total
          (let ((n (or (map-elt usage :total-tokens) 0)))
            (if (> n 0)
@@ -201,26 +202,30 @@ Only returns an indicator if enabled and usage data is available."
               (context-used (map-elt usage :context-used))
               (context-size (map-elt usage :context-size))
               ((> context-size 0)))
-    (let* ((percentage (/ (* 100.0 context-used) context-size))
-           ;; Unicode vertical block characters from empty to full
-           (indicator (cond
-                       ((>= percentage 100) "█")  ; Full
-                       ((>= percentage 87.5) "▇")
-                       ((>= percentage 75) "▆")
-                       ((>= percentage 62.5) "▅")
-                       ((>= percentage 50) "▄")
-                       ((>= percentage 37.5) "▃")
-                       ((>= percentage 25) "▂")
-                       ((> percentage 0) "▁")
-                       (t nil)))  ; Return nil for no usage
-           (face (cond
-                  ((>= percentage 85) 'error)         ; Red for critical
-                  ((>= percentage 60) 'warning)       ; Yellow/orange for warning
-                  (t 'success))))                     ; Green for normal
-      (when indicator
-        (propertize indicator
-                    'face face
-                    'help-echo (agent-shell--format-usage usage))))))
+    (if (< context-size context-used)
+        (propertize "?"
+                    'face 'warning
+                    'help-echo (agent-shell--format-usage usage))
+      (let* ((percentage (/ (* 100.0 context-used) context-size))
+             ;; Unicode vertical block characters from empty to full
+             (indicator (cond
+                         ((>= percentage 100) "█")  ; Full
+                         ((>= percentage 87.5) "▇")
+                         ((>= percentage 75) "▆")
+                         ((>= percentage 62.5) "▅")
+                         ((>= percentage 50) "▄")
+                         ((>= percentage 37.5) "▃")
+                         ((>= percentage 25) "▂")
+                         ((> percentage 0) "▁")
+                         (t nil)))  ; Return nil for no usage
+             (face (cond
+                    ((>= percentage 85) 'error)         ; Red for critical
+                    ((>= percentage 60) 'warning)       ; Yellow/orange for warning
+                    (t 'success))))                     ; Green for normal
+        (when indicator
+          (propertize indicator
+                      'face face
+                      'help-echo (agent-shell--format-usage usage)))))))
 
 (provide 'agent-shell-usage)
 ;;; agent-shell-usage.el ends here
