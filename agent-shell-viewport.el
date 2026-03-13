@@ -988,8 +988,98 @@ VIEWPORT-BUFFER is the viewport buffer to check."
     (define-key map (kbd "s") #'agent-shell-viewport-set-session-mode)
     (define-key map (kbd "o") #'agent-shell-other-buffer)
     (define-key map (kbd "C-c C-o") #'agent-shell-other-buffer)
+    (define-key map (kbd "?") #'agent-shell-viewport-help-menu)
     map)
   "Keymap for `agent-shell-viewport-view-mode'.")
+
+(defun agent-shell-viewport-help-menu ()
+  "Show viewport and display the transient help menu (bound to ? in view mode)."
+  (declare (modes agent-shell-viewport-view-mode))
+  (interactive)
+  (unless (derived-mode-p 'agent-shell-viewport-view-mode)
+    (error "Not in a viewport buffer"))
+  (transient-define-prefix agent-shell-viewport--help-menu ()
+    "`agent-shell' viewport help menu"
+    [:class transient-columns
+            :setup-children
+            (lambda (_)
+              (transient-parse-suffixes
+               'agent-shell-viewport-help-menu
+               (list
+                (apply #'vector "Viewport Help"
+                       (agent-shell-viewport--make-transient-group
+                        '(((:function . agent-shell-viewport-next-item)
+                           (:description . "Next item"))
+                          ((:function . agent-shell-viewport-previous-item)
+                           (:description . "Previous item"))
+                          ((:function . agent-shell-viewport-next-page)
+                           (:description . "Next page")
+                           (:if-not . agent-shell-viewport--busy-p))
+                          ((:function . agent-shell-viewport-previous-page)
+                           (:description . "Previous page")
+                           (:if-not . agent-shell-viewport--busy-p))
+                          ((:function . agent-shell-other-buffer)
+                           (:description . "Switch to shell")))))
+                (apply #'vector ""
+                       (agent-shell-viewport--make-transient-group
+                        '(((:function . agent-shell-viewport-reply)
+                           (:description . "Reply…")
+                           (:if-not . agent-shell-viewport--busy-p))
+                          ((:function . agent-shell-viewport-reply-yes)
+                           (:description . "Reply \"yes\"")
+                           (:if-not . agent-shell-viewport--busy-p))
+                          ((:function . agent-shell-viewport-reply-more)
+                           (:description . "Reply \"more\"")
+                           (:if-not . agent-shell-viewport--busy-p))
+                          ((:function . agent-shell-viewport-reply-again)
+                           (:description . "Reply \"again\"")
+                           (:if-not . agent-shell-viewport--busy-p))
+                          ((:function . agent-shell-viewport-reply-1)
+                           (:description . "Reply \"1\"")
+                           (:if-not . agent-shell-viewport--busy-p)))))
+                (apply #'vector ""
+                       (agent-shell-viewport--make-transient-group
+                        '(((:function . agent-shell-viewport-set-session-model)
+                           (:description . "Set model"))
+                          ((:function . agent-shell-viewport-set-session-mode)
+                           (:description . "Set mode"))
+                          ((:function . agent-shell-viewport-cycle-session-mode)
+                           (:description . "Cycle mode"))
+                          ((:function . agent-shell-viewport-interrupt)
+                           (:description . "Interrupt"))
+                          ((:function . bury-buffer)
+                           (:description . "Close")))))
+                (apply #'vector ""
+                       (agent-shell-viewport--make-transient-group
+                        '(((:function . agent-shell-viewport-view-traffic)
+                           (:description . "View traffic"))
+                          ((:function . agent-shell-viewport-view-acp-logs)
+                           (:description . "View logs"))
+                          ((:function . agent-shell-viewport-copy-session-id)
+                           (:description . "Copy session ID"))
+                          ((:function . agent-shell-viewport-open-transcript)
+                           (:description . "Open transcript")))))
+                )))])
+  (call-interactively #'agent-shell-viewport--help-menu))
+
+(defun agent-shell-viewport--make-transient-group (commands)
+  "Build a list of transient suffix specs from COMMANDS.
+Each element of COMMANDS is an alist with keys :function, :description,
+and optionally :if or :if-not.  Returns only suffixes whose function
+has a binding in `agent-shell-viewport-view-mode-map'."
+  (seq-filter
+   #'identity
+   (seq-map (lambda (command)
+              (when-let* ((keys (where-is-internal (map-elt command :function)
+                                                   agent-shell-viewport-view-mode-map t))
+                          ((not (keymapp keys)))
+                          (description (map-elt command :description)))
+                (append (list (key-description keys) description (map-elt command :function) :transient t)
+                        (when-let ((pred (map-elt command :if)))
+                          (list :if pred))
+                        (when-let ((pred (map-elt command :if-not)))
+                          (list :if-not pred)))))
+            commands)))
 
 (defun agent-shell-viewport--update-header ()
   "Update header and mode line based on `agent-shell-header-style'.
@@ -1012,38 +1102,43 @@ Automatically determines qualifier and bindings based on current major mode."
                       `((:key . ,(key-description (where-is-internal
                                                    'agent-shell-viewport-compose-send
                                                    agent-shell-viewport-edit-mode-map t)))
-                        (:description . "send"))
+                        (:description . "Submit"))
                       `((:key . ,(key-description (where-is-internal
                                                    'agent-shell-viewport-compose-cancel
                                                    agent-shell-viewport-edit-mode-map t)))
-                        (:description . "cancel"))
+                        (:description . "Cancel"))
                       `((:key . ,(key-description (where-is-internal
                                                    'agent-shell-viewport-compose-peek-last
                                                    agent-shell-viewport-edit-mode-map t)))
-                        (:description . "previous page"))))
+                        (:description . "Previous page"))))
                     ((derived-mode-p 'agent-shell-viewport-view-mode)
                      (append
                       (list
                        `((:key . ,(key-description (where-is-internal
                                                     'agent-shell-viewport-next-item
                                                     agent-shell-viewport-view-mode-map t)))
-                         (:description . "next"))
+                         (:description . "Next"))
                        `((:key . ,(key-description (where-is-internal
                                                     'agent-shell-viewport-previous-item
                                                     agent-shell-viewport-view-mode-map t)))
-                         (:description . "previous")))
+                         (:description . "Previous")))
                       (unless (agent-shell-viewport--busy-p)
                         (list
                          `((:key . ,(key-description (where-is-internal
                                                       'agent-shell-viewport-reply
                                                       agent-shell-viewport-view-mode-map t)))
-                           (:description . "reply"))))
+                           (:description . "Reply…"))))
                       (when (agent-shell-viewport--busy-p)
                         (list
                          `((:key . ,(key-description (where-is-internal
                                                       'agent-shell-viewport-interrupt
                                                       agent-shell-viewport-view-mode-map t)))
-                           (:description . "interrupt")))))))))
+                           (:description . "Interrupt"))))
+                      (list
+                       `((:key . ,(key-description (where-is-internal
+                                                    'agent-shell-viewport-help-menu
+                                                    agent-shell-viewport-view-mode-map t)))
+                         (:description . "Help"))))))))
     (when-let* ((shell-buffer (agent-shell-viewport--shell-buffer))
                 (header (with-current-buffer shell-buffer
                           (cond
