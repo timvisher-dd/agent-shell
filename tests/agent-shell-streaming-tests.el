@@ -374,6 +374,42 @@ otherwise the label change is silently dropped."
         (should (string-match-p "Initializing" text))
         (should (string-match-p "Ready" text))))))
 
+(ert-deftest agent-shell-ui-update-fragment-append-preserves-single-newline-test ()
+  "Appending a chunk whose text starts with a single newline must
+preserve that newline.  Regression: the append-in-place path
+previously stripped leading newlines from each chunk, collapsing
+markdown list item separators (e.g. \"&&.\\n2.\" became \"&&.2.\")."
+  (with-temp-buffer
+    (let ((inhibit-read-only t))
+      (let ((model (list (cons :namespace-id "1")
+                         (cons :block-id "nl")
+                         (cons :label-left "Agent")
+                         (cons :body "1. First item"))))
+        (agent-shell-ui-update-fragment model :expanded t))
+      (let ((model2 (list (cons :namespace-id "1")
+                          (cons :block-id "nl")
+                          (cons :body "\n2. Second item"))))
+        (agent-shell-ui-update-fragment model2 :append t :expanded t))
+      (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+        (should (string-match-p "First item\n.*2\\. Second item" text))))))
+
+(ert-deftest agent-shell-ui-update-fragment-append-preserves-double-newline-test ()
+  "Appending a chunk starting with a double newline (paragraph break)
+must preserve both newlines."
+  (with-temp-buffer
+    (let ((inhibit-read-only t))
+      (let ((model (list (cons :namespace-id "1")
+                         (cons :block-id "dnl")
+                         (cons :label-left "Agent")
+                         (cons :body "Paragraph one."))))
+        (agent-shell-ui-update-fragment model :expanded t))
+      (let ((model2 (list (cons :namespace-id "1")
+                          (cons :block-id "dnl")
+                          (cons :body "\n\nParagraph two."))))
+        (agent-shell-ui-update-fragment model2 :append t :expanded t))
+      (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+        (should (string-match-p "Paragraph one\\.\n.*\n.*Paragraph two" text))))))
+
 ;;; Label status transition tests
 
 (ert-deftest agent-shell--tool-call-update-overrides-uses-correct-keyword-test ()
