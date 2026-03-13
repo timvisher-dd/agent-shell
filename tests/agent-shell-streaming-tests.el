@@ -60,7 +60,7 @@ For example:
          (agent-shell--state (agent-shell--make-state :buffer buffer)))
     (map-put! agent-shell--state :client 'test-client)
     (map-put! agent-shell--state :request-count 1)
-    (map-put! agent-shell--state :active-request t)
+    (map-put! agent-shell--state :active-requests (list t))
     (with-current-buffer buffer
       (erase-buffer)
       (agent-shell-mode))
@@ -91,7 +91,7 @@ Simplified replay without terminal notifications: sends tool_call
          (stdout-text "line 0\nline 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9"))
     (map-put! agent-shell--state :client 'test-client)
     (map-put! agent-shell--state :request-count 1)
-    (map-put! agent-shell--state :active-request t)
+    (map-put! agent-shell--state :active-requests (list t))
     (with-current-buffer buffer
       (erase-buffer)
       (agent-shell-mode))
@@ -177,7 +177,7 @@ incremental terminal_output.data chunks, then completed update."
          (tool-id "call_codex_test"))
     (map-put! agent-shell--state :client 'test-client)
     (map-put! agent-shell--state :request-count 1)
-    (map-put! agent-shell--state :active-request t)
+    (map-put! agent-shell--state :active-requests (list t))
     (with-current-buffer buffer
       (erase-buffer)
       (agent-shell-mode))
@@ -279,7 +279,7 @@ a cumulative re-delivery of the complete thought text."
          (thought-text "**Checking beads**\n\nLooking for .beads directory."))
     (map-put! agent-shell--state :client 'test-client)
     (map-put! agent-shell--state :request-count 1)
-    (map-put! agent-shell--state :active-request t)
+    (map-put! agent-shell--state :active-requests (list t))
     (with-current-buffer buffer
       (erase-buffer)
       (agent-shell-mode))
@@ -400,7 +400,7 @@ verifies the buffer contains the done label, not wait."
          (tool-id "toolu_label_done"))
     (map-put! agent-shell--state :client 'test-client)
     (map-put! agent-shell--state :request-count 1)
-    (map-put! agent-shell--state :active-request t)
+    (map-put! agent-shell--state :active-requests (list t))
     (with-current-buffer buffer
       (erase-buffer)
       (agent-shell-mode))
@@ -446,7 +446,7 @@ Upstream updates labels on every tool_call_update, not just final."
          (tool-id "toolu_label_busy"))
     (map-put! agent-shell--state :client 'test-client)
     (map-put! agent-shell--state :request-count 1)
-    (map-put! agent-shell--state :active-request t)
+    (map-put! agent-shell--state :active-requests (list t))
     (with-current-buffer buffer
       (erase-buffer)
       (agent-shell-mode))
@@ -491,7 +491,7 @@ tool call has a saved :command.  Verify the fenced block appears."
          (tool-id "toolu_cmd_block"))
     (map-put! agent-shell--state :client 'test-client)
     (map-put! agent-shell--state :request-count 1)
-    (map-put! agent-shell--state :active-request t)
+    (map-put! agent-shell--state :active-requests (list t))
     (with-current-buffer buffer
       (erase-buffer)
       (agent-shell-mode))
@@ -535,7 +535,7 @@ with no prior meta chunks.  The output must not be dropped."
          (tool-id "toolu_meta_final"))
     (map-put! agent-shell--state :client 'test-client)
     (map-put! agent-shell--state :request-count 1)
-    (map-put! agent-shell--state :active-request t)
+    (map-put! agent-shell--state :active-requests (list t))
     (with-current-buffer buffer
       (erase-buffer)
       (agent-shell-mode))
