@@ -106,9 +106,12 @@ For existing blocks, the current expansion state is preserved unless overridden.
                          (old-body-start (map-elt body-range :start))
                          (old-body-end (map-elt body-range :end))
                          (body-text new-body))
-                    ;; Process body text (same as insert-fragment)
-                    (when (string-prefix-p "\n" body-text)
-                      (setq body-text (string-trim-left body-text "\n")))
+                    ;; Normalize trailing whitespace only.  Do NOT
+                    ;; strip leading newlines here — unlike the initial
+                    ;; insert (where \n\n is already placed between
+                    ;; label and body), appended chunks carry meaningful
+                    ;; leading newlines (list-item separators, paragraph
+                    ;; breaks, etc.).
                     (when (string-suffix-p "\n\n" body-text)
                       (setq body-text (concat (string-trim-right body-text) "\n\n")))
                     (if (map-elt state :collapsed)
