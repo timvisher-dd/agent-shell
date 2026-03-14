@@ -437,7 +437,8 @@ NAVIGATION controls navigability:
                             ;; Use agent-shell-ui--content-store for these instances.
                             ;; For example, fragment body.
                             (cons :qualified-id qualified-id)
-                            (cons :collapsed (not expanded))
+                            (cons :collapsed (and (or label-left label-right)
+                                                    (not expanded)))
                             (cons :navigatable (cond
                                                 ((eq navigation 'never) nil)
                                                 ((eq navigation 'always) t)
