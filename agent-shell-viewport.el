@@ -949,6 +949,7 @@ VIEWPORT-BUFFER is the viewport buffer to check."
     (define-key map (kbd "C-c C-c") #'agent-shell-viewport-compose-send)
     (define-key map (kbd "C-c C-p") #'agent-shell-viewport-compose-peek-last)
     (define-key map (kbd "C-c C-k") #'agent-shell-viewport-compose-cancel)
+    (define-key map (kbd "C-c C-h") #'agent-shell-viewport-compose-help-menu)
     (define-key map (kbd "C-<tab>") #'agent-shell-viewport-cycle-session-mode)
     (define-key map (kbd "C-c C-m") #'agent-shell-viewport-set-session-mode)
     (define-key map (kbd "C-c C-v") #'agent-shell-viewport-set-session-model)
@@ -1008,6 +1009,7 @@ VIEWPORT-BUFFER is the viewport buffer to check."
                (list
                 (apply #'vector "Viewport Help"
                        (agent-shell-viewport--make-transient-group
+                        agent-shell-viewport-view-mode-map
                         '(((:function . agent-shell-viewport-next-item)
                            (:description . "Next item"))
                           ((:function . agent-shell-viewport-previous-item)
@@ -1016,12 +1018,14 @@ VIEWPORT-BUFFER is the viewport buffer to check."
                            (:description . "Next page")
                            (:if-not . agent-shell-viewport--busy-p))
                           ((:function . agent-shell-viewport-previous-page)
-                           (:description . "Previous page")
+                           (:description . "Previous Page")
                            (:if-not . agent-shell-viewport--busy-p))
                           ((:function . agent-shell-other-buffer)
-                           (:description . "Switch to shell")))))
+                           (:description . "Switch to shell")
+                           (:transient . nil)))))
                 (apply #'vector ""
                        (agent-shell-viewport--make-transient-group
+                        agent-shell-viewport-view-mode-map
                         '(((:function . agent-shell-viewport-reply)
                            (:description . "Reply…")
                            (:if-not . agent-shell-viewport--busy-p))
@@ -1039,6 +1043,7 @@ VIEWPORT-BUFFER is the viewport buffer to check."
                            (:if-not . agent-shell-viewport--busy-p)))))
                 (apply #'vector ""
                        (agent-shell-viewport--make-transient-group
+                        agent-shell-viewport-view-mode-map
                         '(((:function . agent-shell-viewport-set-session-model)
                            (:description . "Set model"))
                           ((:function . agent-shell-viewport-set-session-mode)
@@ -1048,9 +1053,11 @@ VIEWPORT-BUFFER is the viewport buffer to check."
                           ((:function . agent-shell-viewport-interrupt)
                            (:description . "Interrupt"))
                           ((:function . bury-buffer)
-                           (:description . "Close")))))
+                           (:description . "Close")
+                           (:transient . nil)))))
                 (apply #'vector ""
                        (agent-shell-viewport--make-transient-group
+                        agent-shell-viewport-view-mode-map
                         '(((:function . agent-shell-viewport-view-traffic)
                            (:description . "View traffic"))
                           ((:function . agent-shell-viewport-view-acp-logs)
@@ -1062,19 +1069,66 @@ VIEWPORT-BUFFER is the viewport buffer to check."
                 )))])
   (call-interactively #'agent-shell-viewport--help-menu))
 
-(defun agent-shell-viewport--make-transient-group (commands)
-  "Build a list of transient suffix specs from COMMANDS.
+(defun agent-shell-viewport-compose-help-menu ()
+  "Show the transient help menu for compose (edit) mode."
+  (declare (modes agent-shell-viewport-edit-mode))
+  (interactive)
+  (unless (derived-mode-p 'agent-shell-viewport-edit-mode)
+    (error "Not in a compose buffer"))
+  (transient-define-prefix agent-shell-viewport--compose-help-menu ()
+    "`agent-shell' viewport compose help menu"
+    [:class transient-columns
+            :setup-children
+            (lambda (_)
+              (transient-parse-suffixes
+               'agent-shell-viewport-compose-help-menu
+               (list
+                (apply #'vector "Compose Help"
+                       (agent-shell-viewport--make-transient-group
+                        agent-shell-viewport-edit-mode-map
+                        '(((:function . agent-shell-viewport-compose-send)
+                           (:description . "Submit"))
+                          ((:function . agent-shell-viewport-compose-cancel)
+                           (:description . "Cancel"))
+                          ((:function . agent-shell-viewport-compose-peek-last)
+                           (:description . "Previous Page")))))
+                (apply #'vector ""
+                       (agent-shell-viewport--make-transient-group
+                        agent-shell-viewport-edit-mode-map
+                        '(((:function . agent-shell-viewport-previous-history)
+                           (:description . "Previous prompt"))
+                          ((:function . agent-shell-viewport-next-history)
+                           (:description . "Next prompt"))
+                          ((:function . agent-shell-viewport-search-history)
+                           (:description . "Search prompts")))))
+                (apply #'vector ""
+                       (agent-shell-viewport--make-transient-group
+                        agent-shell-viewport-edit-mode-map
+                        '(((:function . agent-shell-viewport-set-session-model)
+                           (:description . "Set model"))
+                          ((:function . agent-shell-viewport-set-session-mode)
+                           (:description . "Set mode"))
+                          ((:function . agent-shell-viewport-cycle-session-mode)
+                           (:description . "Cycle mode"))
+                          ((:function . agent-shell-other-buffer)
+                           (:description . "Switch to shell")
+                           (:transient . nil))))))))])
+  (call-interactively #'agent-shell-viewport--compose-help-menu))
+
+(defun agent-shell-viewport--make-transient-group (keymap commands)
+  "Build a list of transient suffix specs from COMMANDS using KEYMAP.
 Each element of COMMANDS is an alist with keys :function, :description,
-and optionally :if or :if-not.  Returns only suffixes whose function
-has a binding in `agent-shell-viewport-view-mode-map'."
+and optionally :if, :if-not, or :transient (defaults to t).
+Returns only suffixes whose function has a binding in KEYMAP."
   (seq-filter
    #'identity
    (seq-map (lambda (command)
               (when-let* ((keys (where-is-internal (map-elt command :function)
-                                                   agent-shell-viewport-view-mode-map t))
+                                                   keymap t))
                           ((not (keymapp keys)))
                           (description (map-elt command :description)))
-                (append (list (key-description keys) description (map-elt command :function) :transient t)
+                (append (list (key-description keys) description (map-elt command :function)
+                              :transient (map-elt command :transient t))
                         (when-let ((pred (map-elt command :if)))
                           (list :if pred))
                         (when-let ((pred (map-elt command :if-not)))
@@ -1110,7 +1164,11 @@ Automatically determines qualifier and bindings based on current major mode."
                       `((:key . ,(key-description (where-is-internal
                                                    'agent-shell-viewport-compose-peek-last
                                                    agent-shell-viewport-edit-mode-map t)))
-                        (:description . "Previous page"))))
+                        (:description . "Previous Page"))
+                      `((:key . ,(key-description (where-is-internal
+                                                   'agent-shell-viewport-compose-help-menu
+                                                   agent-shell-viewport-edit-mode-map t)))
+                        (:description . "Help"))))
                     ((derived-mode-p 'agent-shell-viewport-view-mode)
                      (append
                       (list
