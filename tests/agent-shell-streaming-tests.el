@@ -610,5 +610,90 @@ with no prior meta chunks.  The output must not be dropped."
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
+(ert-deftest agent-shell--agent-message-chunks-fully-visible-test ()
+  "All agent_message_chunk tokens must be visible in the buffer.
+Regression: label-less fragments defaulted to :collapsed t.  The
+in-place append path used `insert-and-inherit', which inherited the
+`invisible t' property from the trailing-whitespace-hiding step of
+the previous body text, making every appended chunk invisible.
+
+Replays the traffic captured in the debug log: a completed tool call
+followed by streaming agent_message_chunk tokens.  The full message
+\"All 10 tests pass.\" must be visible, not just \"All\"."
+  (let* ((buffer (get-buffer-create " *agent-shell-msg-chunk-visible*"))
+         (agent-shell--state (agent-shell--make-state :buffer buffer))
+         (agent-shell--transcript-file nil)
+         (tool-id "toolu_msg_chunk_test"))
+    (map-put! agent-shell--state :client 'test-client)
+    (map-put! agent-shell--state :request-count 1)
+    (map-put! agent-shell--state :active-requests (list t))
+    (with-current-buffer buffer
+      (erase-buffer)
+      (agent-shell-mode))
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell--make-diff-info)
+                   (cl-function (lambda (&key acp-tool-call) (ignore acp-tool-call)))))
+          (with-current-buffer buffer
+            ;; tool_call (pending)
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :acp-notification `((method . "session/update")
+                             (params . ((update
+                                         . ((toolCallId . ,tool-id)
+                                            (sessionUpdate . "tool_call")
+                                            (rawInput)
+                                            (status . "pending")
+                                            (title . "Bash")
+                                            (kind . "execute")))))))
+            ;; tool_call_update with toolResponse.stdout
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :acp-notification `((method . "session/update")
+                             (params . ((update
+                                         . ((_meta (claudeCode (toolResponse (stdout . "Ran 10 tests, 10 results as expected")
+                                                                             (stderr . "")
+                                                                             (interrupted)
+                                                                             (isImage)
+                                                                             (noOutputExpected))
+                                                               (toolName . "Bash")))
+                                            (toolCallId . ,tool-id)
+                                            (sessionUpdate . "tool_call_update")))))))
+            ;; tool_call_update completed
+            (agent-shell--on-notification
+             :state agent-shell--state
+             :acp-notification `((method . "session/update")
+                             (params . ((update
+                                         . ((toolCallId . ,tool-id)
+                                            (sessionUpdate . "tool_call_update")
+                                            (status . "completed")))))))
+            ;; Now stream agent_message_chunk tokens (the agent's
+            ;; conversational response).  This is label-less text.
+            (dolist (token (list "All " "10 tests pass" "." " Now"
+                                 " let me prepare" " the PR."))
+              (agent-shell--on-notification
+               :state agent-shell--state
+               :acp-notification `((method . "session/update")
+                               (params . ((update
+                                           . ((sessionUpdate . "agent_message_chunk")
+                                              (content (type . "text")
+                                                       (text . ,token)))))))))
+            ;; The full message must be present AND visible.
+            (let ((visible-text (agent-shell-test--visible-buffer-string)))
+              (should (string-match-p "All 10 tests pass" visible-text))
+              (should (string-match-p "let me prepare the PR" visible-text)))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(defun agent-shell-test--visible-buffer-string ()
+  "Return buffer text with invisible regions removed."
+  (let ((result "")
+        (pos (point-min)))
+    (while (< pos (point-max))
+      (let ((next-change (next-single-property-change pos 'invisible nil (point-max))))
+        (unless (get-text-property pos 'invisible)
+          (setq result (concat result (buffer-substring-no-properties pos next-change))))
+        (setq pos next-change)))
+    result))
+
 (provide 'agent-shell-streaming-tests)
 ;;; agent-shell-streaming-tests.el ends here
