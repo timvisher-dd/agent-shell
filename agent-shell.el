@@ -60,6 +60,7 @@
 (require 'agent-shell-goose)
 (require 'agent-shell-heartbeat)
 (require 'agent-shell-active-message)
+(require 'agent-shell-alert)
 (require 'agent-shell-kiro)
 (require 'agent-shell-mistral)
 (require 'agent-shell-openai)
@@ -686,10 +687,19 @@ OUTGOING-REQUEST-DECORATOR (passed through to `acp-make-client')."
                            (cons :context-used 0)
                            (cons :context-size 0)
                            (cons :cost-amount 0.0)
-                           (cons :cost-currency nil)))))
+                           (cons :cost-currency nil)))
+        (cons :idle-notification-timer nil)))
 
 (defvar-local agent-shell--state
     (agent-shell--make-state))
+
+(defvar agent-shell-idle-notification-delay 30
+  "Seconds of idle time before sending a terminal notification.
+Defaults to 30.  When non-nil, a timer starts each time an agent
+turn completes.  If the user does not interact with the buffer
+within this many seconds, a desktop notification is sent via OSC
+escape sequences.  Any user input in the buffer cancels the
+pending notification.  Set to nil to disable idle notifications.")
 
 (defvar-local agent-shell--transcript-file nil
   "Path to the shell's transcript file.")
@@ -3403,6 +3413,37 @@ DATA is an optional alist of event-specific data."
         (with-current-buffer (map-elt (agent-shell--state) :buffer)
           (funcall (map-elt sub :on-event) event-alist))))))
 
+;;; Idle notification
+
+(defun agent-shell--idle-notification-cancel ()
+  "Cancel pending idle notification timer and remove the hook."
+  (when-let ((timer (map-elt (agent-shell--state) :idle-notification-timer)))
+    (when (timerp timer)
+      (cancel-timer timer))
+    (map-put! (agent-shell--state) :idle-notification-timer nil))
+  (remove-hook 'post-command-hook #'agent-shell--idle-notification-cancel t))
+
+(defun agent-shell--idle-notification-fire ()
+  "Send idle notification and clean up the hook."
+  (remove-hook 'post-command-hook #'agent-shell--idle-notification-cancel t)
+  (map-put! (agent-shell--state) :idle-notification-timer nil)
+  (message "agent-shell: Prompt is waiting for input")
+  (agent-shell-alert-notify "agent-shell" "Prompt is waiting for input"))
+
+(defun agent-shell--idle-notification-start ()
+  "Start idle notification timer if `agent-shell-idle-notification-delay' is set."
+  (when agent-shell-idle-notification-delay
+    (agent-shell--idle-notification-cancel)
+    (let ((shell-buffer (map-elt (agent-shell--state) :buffer)))
+      (map-put! (agent-shell--state)
+                :idle-notification-timer
+                (run-at-time agent-shell-idle-notification-delay nil
+                             (lambda ()
+                               (when (buffer-live-p shell-buffer)
+                                 (with-current-buffer shell-buffer
+                                   (agent-shell--idle-notification-fire))))))
+      (add-hook 'post-command-hook #'agent-shell--idle-notification-cancel nil t))))
+
 ;;; Initialization
 
 (cl-defun agent-shell--initialize-client ()
@@ -4401,6 +4442,7 @@ If FILE-PATH is not an image, returns nil."
                       :event 'turn-complete
                       :data (list (cons :stop-reason (map-elt acp-response 'stopReason))
                                   (cons :usage (map-elt (agent-shell--state) :usage))))
+                     (agent-shell--idle-notification-start)
                      ;; Update viewport header (longer busy)
                      (when-let ((viewport-buffer (agent-shell-viewport--buffer
                                                   :shell-buffer shell-buffer

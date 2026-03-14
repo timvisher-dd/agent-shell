@@ -1924,6 +1924,71 @@ code block content
         (should-not responded)
         (should (equal (map-elt state :last-entry-type) "session/request_permission"))))))
 
+;;; Idle notification tests
+
+(ert-deftest agent-shell--idle-notification-start-sets-timer-and-hook-test ()
+  "Test that `agent-shell--idle-notification-start' sets up timer and hook."
+  (with-temp-buffer
+    (let ((agent-shell-idle-notification-delay 30)
+          (agent-shell--state (list (cons :buffer (current-buffer))
+                                    (cons :idle-notification-timer nil))))
+      (cl-letf (((symbol-function 'agent-shell--state)
+                 (lambda () agent-shell--state)))
+        (agent-shell--idle-notification-start)
+        (should (timerp (map-elt agent-shell--state :idle-notification-timer)))
+        (should (memq #'agent-shell--idle-notification-cancel
+                      (buffer-local-value 'post-command-hook (current-buffer))))
+        (agent-shell--idle-notification-cancel)))))
+
+(ert-deftest agent-shell--idle-notification-cancel-cleans-up-test ()
+  "Test that user input cancels the idle notification timer and hook."
+  (with-temp-buffer
+    (let ((agent-shell-idle-notification-delay 30)
+          (agent-shell--state (list (cons :buffer (current-buffer))
+                                    (cons :idle-notification-timer nil))))
+      (cl-letf (((symbol-function 'agent-shell--state)
+                 (lambda () agent-shell--state)))
+        (agent-shell--idle-notification-start)
+        (let ((timer (map-elt agent-shell--state :idle-notification-timer)))
+          (should (timerp timer))
+          (agent-shell--idle-notification-cancel)
+          (should-not (map-elt agent-shell--state :idle-notification-timer))
+          (should-not (memq #'agent-shell--idle-notification-cancel
+                            (buffer-local-value 'post-command-hook (current-buffer)))))))))
+
+(ert-deftest agent-shell--idle-notification-fire-sends-and-cleans-up-test ()
+  "Test that timer firing sends notification and removes hook."
+  (with-temp-buffer
+    (let ((agent-shell-idle-notification-delay 30)
+          (agent-shell--state (list (cons :buffer (current-buffer))
+                                    (cons :idle-notification-timer nil)))
+          (notified nil))
+      (cl-letf (((symbol-function 'agent-shell--state)
+                 (lambda () agent-shell--state))
+                ((symbol-function 'agent-shell-alert-notify)
+                 (lambda (title body)
+                   (setq notified (list title body)))))
+        (agent-shell--idle-notification-start)
+        (should (timerp (map-elt agent-shell--state :idle-notification-timer)))
+        (agent-shell--idle-notification-fire)
+        (should (equal notified '("agent-shell" "Prompt is waiting for input")))
+        (should-not (map-elt agent-shell--state :idle-notification-timer))
+        (should-not (memq #'agent-shell--idle-notification-cancel
+                          (buffer-local-value 'post-command-hook (current-buffer))))))))
+
+(ert-deftest agent-shell--idle-notification-nil-delay-does-nothing-test ()
+  "Test that nil delay means no timer is started."
+  (with-temp-buffer
+    (let ((agent-shell-idle-notification-delay nil)
+          (agent-shell--state (list (cons :buffer (current-buffer))
+                                    (cons :idle-notification-timer nil))))
+      (cl-letf (((symbol-function 'agent-shell--state)
+                 (lambda () agent-shell--state)))
+        (agent-shell--idle-notification-start)
+        (should-not (map-elt agent-shell--state :idle-notification-timer))
+        (should-not (memq #'agent-shell--idle-notification-cancel
+                          (buffer-local-value 'post-command-hook (current-buffer))))))))
+
 (ert-deftest agent-shell-alert--osc-payload-test ()
   "Test OSC payload generation for each protocol."
   (let ((agent-shell-alert-osc-protocol 'osc-9))
