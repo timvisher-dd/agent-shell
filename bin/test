@@ -1,58 +1,79 @@
-#!/usr/bin/env bash
-# Runs the same checks as CI by parsing .github/workflows/ci.yml directly.
-# If CI steps change, this script automatically picks them up.
-#
-# Local adaptations:
-# - Dependencies (acp.el, shell-maker) are symlinked into deps/ from
-#   local worktree checkouts instead of being cloned by GitHub Actions.
-#   Override locations with acp_root and shell_maker_root env vars.
-set -euo pipefail
+#!/usr/bin/env bash -O globstar -O extglob
 
-cd "$(git rev-parse --show-toplevel)"
+# Assume that acp.el and shell-maker are checked out in sibling trunk
+# worktrees and allow their location to be overridden:
+# …/agent-shell/main/bin/test
+# …/acp.el/main
+# …/shell-maker/main
+root=$(dirname "$0")/..
+tests_dir=${root}/tests
+acp_root=${acp_root:-${root}/../../acp.el/main}
+shell_maker_root=${shell_maker_root:-${root}/../../shell-maker/main}
 
-ci_yaml=".github/workflows/ci.yml"
-
-if ! command -v yq &>/dev/null; then
-  echo "error: yq is required (brew install yq)" >&2
-  exit 1
-fi
-
-# Resolve local dependency paths — CI checks these out via actions/checkout
-acp_root=${acp_root:-../../acp.el/main}
-shell_maker_root=${shell_maker_root:-../../shell-maker/main}
-
-die=0
-if ! [[ -r ${acp_root}/acp.el ]]; then
-  echo "error: acp.el not found at ${acp_root}" >&2
-  echo "Set acp_root to your acp.el checkout" >&2
+if ! [[ -r ${acp_root}/acp.el ]]
+then
+  echo "Set shell_maker_root to your shell-maker checkout (e.g. ~/git/xenodium/shell-maker/main)" >&2
   die=1
 fi
 
-if ! [[ -r ${shell_maker_root}/shell-maker.el ]]; then
-  echo "error: shell-maker.el not found at ${shell_maker_root}" >&2
-  echo "Set shell_maker_root to your shell-maker checkout" >&2
+if ! [[ -r ${shell_maker_root}/shell-maker.el ]]
+then
+  echo "Set shell_maker_root to your shell-maker checkout (e.g. ~/git/xenodium/shell-maker/main)" >&2
   die=1
 fi
 
-if (( 0 < die )); then
+if [[ -n $die ]]
+then
+  echo "Fix the ↑ problems" >&2
   exit 1
 fi
 
-# Create deps/ symlinks to match CI layout
-mkdir -p deps
-ln -sfn "$(cd "${acp_root}" && pwd)" deps/acp.el
-ln -sfn "$(cd "${shell_maker_root}" && pwd)" deps/shell-maker
+shopt -s nullglob
+all_elc_files=({"${root}","${acp_root}","${shell_maker_root}"}/**/*.elc)
+all_el_files=("${root}"/*.el)
+test_files=("${tests_dir}"/*-tests.el)
+shopt -u nullglob
 
-# Extract and run CI steps
-step_count=$(yq '[.jobs.test.steps[] | select(.run)] | length' "$ci_yaml")
+if (( 0 < ${#all_elc_files[@]} ))
+then
+  rm -v "${all_elc_files[@]}"
+fi
 
-for (( i = 0; i < step_count; i++ )); do
-  name=$(yq "[.jobs.test.steps[] | select(.run)].[${i}].name" "$ci_yaml")
-  cmd=$(yq "[.jobs.test.steps[] | select(.run)].[${i}].run" "$ci_yaml")
-
-  echo "=== ${name} ==="
-  eval "$cmd"
-  echo ""
+# Filter out x./y./z. prefixed scratch files from compilation
+compile_files=()
+for f in "${all_el_files[@]}"; do
+  case "$(basename "$f")" in
+    x.*|y.*|z.*) ;;
+    *) compile_files+=("$f") ;;
+  esac
 done
 
-echo "=== All CI checks passed ==="
+if (( ${#compile_files[@]} < 1 )); then
+  echo "No compile targets found in ${root}" >&2
+  exit 1
+fi
+
+if (( ${#test_files[@]} < 1 )); then
+  echo "No test files found in ${tests_dir}" >&2
+  exit 1
+fi
+
+test_args=()
+for file in "${test_files[@]}"; do
+  test_args+=(-l "$file")
+done
+
+emacs -Q --batch \
+  -L "${root}" \
+  -L "${acp_root}" \
+  -L "${shell_maker_root}" \
+  -f batch-byte-compile \
+  "${compile_files[@]}"
+
+emacs -Q --batch \
+  -L "${root}" \
+  -L "${acp_root}" \
+  -L "${shell_maker_root}" \
+  -L "${tests_dir}" \
+  "${test_args[@]}" \
+  -f ert-run-tests-batch-and-exit

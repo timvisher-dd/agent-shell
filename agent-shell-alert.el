@@ -20,39 +20,54 @@
 
 ;;; Commentary:
 ;;
-;; Send desktop notifications from Emacs.  In GUI mode on macOS, uses
-;; native UNUserNotificationCenter via a dynamic module
-;; (agent-shell-alert-mac.dylib).  In terminal mode, auto-detects the
-;; host terminal emulator and sends the appropriate OSC escape
-;; sequence: OSC 9 (iTerm2, Ghostty, WezTerm, foot, mintty, ConEmu),
-;; OSC 99 (kitty), or OSC 777 (urxvt, VTE-based terminals),
-;; with DCS passthrough for tmux (when allow-passthrough is enabled).
-;; Falls back to osascript on macOS when the terminal is unknown or
-;; tmux passthrough is not available.
+;; Send desktop notifications from Emacs.
 ;;
-;; The JIT-compile-on-first-use pattern for the native dylib is
-;; inspired by vterm's approach to vterm-module.so.  Terminal
-;; detection and DCS wrapping are inspired by clipetty's approach.
+;; GUI Emacs on macOS:
+;;
+;;   Uses `ns-do-applescript' to run AppleScript's `display
+;;   notification' from within the Emacs process.  Because the
+;;   notification originates from Emacs itself, macOS attributes it to
+;;   Emacs: the Emacs icon appears and clicking the notification
+;;   activates Emacs.  No compilation, no dynamic module, no external
+;;   dependencies.
+;;
+;;   We originally built a JIT-compiled Objective-C dynamic module
+;;   (inspired by vterm's approach to vterm-module.so) that used
+;;   UNUserNotificationCenter — Apple's modern notification API.  It
+;;   worked perfectly on an adhoc-signed Emacs built from source, but
+;;   fails with UNErrorDomain error 1 (UNErrorCodeNotificationsNotAllowed)
+;;   on the Homebrew emacs-app cask build from emacsformacosx.com.
+;;   Apple's documentation says no entitlement is needed for local
+;;   notifications and the hardened runtime has no notification-related
+;;   restrictions, so the root cause is unclear.  The investigation is
+;;   tracked in x.notification-center-spiking.md and in beads issue
+;;   agent-shell-4217.
+;;
+;;   `ns-do-applescript' turns out to give you essentially native
+;;   notifications for free: Emacs-branded, no compilation step, works
+;;   on every macOS Emacs build.  It uses the deprecated AppleScript
+;;   notification bridge rather than UNUserNotificationCenter, but it
+;;   works on current macOS versions and is the pragmatic choice until
+;;   the UNUserNotificationCenter issue is resolved.
+;;
+;; Terminal Emacs:
+;;
+;;   Auto-detects the host terminal emulator and sends the appropriate
+;;   OSC escape sequence: OSC 9 (iTerm2, Ghostty, WezTerm, foot,
+;;   mintty, ConEmu), OSC 99 (kitty), or OSC 777 (urxvt, VTE-based
+;;   terminals), with DCS passthrough for tmux (when
+;;   allow-passthrough is enabled).
+;;
+;; Fallback:
+;;
+;;   Falls back to osascript on macOS when the terminal is unknown or
+;;   tmux passthrough is not available.  On non-macOS platforms where
+;;   the terminal is unrecognized, no OS-level notification is sent.
+;;
+;; Terminal detection and DCS wrapping are inspired by clipetty's
+;; approach.
 
 ;;; Code:
-
-(require 'seq)
-
-(declare-function agent-shell-alert-mac-notify "agent-shell-alert-mac")
-(declare-function agent-shell-alert-mac-request-authorization "agent-shell-alert-mac")
-(declare-function agent-shell-alert-mac-applescript-notify "agent-shell-alert-mac")
-
-(defvar agent-shell-alert--source-dir
-  (file-name-directory (or load-file-name buffer-file-name))
-  "Directory containing agent-shell-alert source files.
-Captured at load time so it remains correct after loading.")
-
-(defvar agent-shell-alert--mac-authorized nil
-  "Non-nil when native macOS notifications are authorized and working.")
-
-(defvar agent-shell-alert--mac-module-tried nil
-  "Non-nil after the first attempt to load the native module.
-Prevents repeated compilation/load attempts on every notification.")
 
 (defvar agent-shell-alert--osascript-warned nil
   "Non-nil after the osascript fallback warning has been shown.")
@@ -178,118 +193,43 @@ TITLE and BODY are the notification title and message.
 set -g allow-passthrough on")))
   (call-process "osascript" nil 0 nil
                 "-e"
-                (format "tell application \"Emacs\" to \
-display notification %S with title %S"
+                (format "display notification %S with title %S"
                         body title)))
-
-(defun agent-shell-alert--mac-available-p ()
-  "Return non-nil if native macOS notifications are authorized and working."
-  (and (eq system-type 'darwin)
-       (display-graphic-p)
-       (fboundp 'agent-shell-alert-mac-notify)
-       agent-shell-alert--mac-authorized))
-
-(defun agent-shell-alert--source-directory ()
-  "Return the directory containing agent-shell-alert source files."
-  agent-shell-alert--source-dir)
-
-(defun agent-shell-alert--module-path ()
-  "Return the expected path of the compiled native module."
-  (expand-file-name
-   (concat "agent-shell-alert-mac" module-file-suffix)
-   (agent-shell-alert--source-directory)))
-
-(defun agent-shell-alert--compile-mac-module ()
-  "Compile the macOS native notification module.
-Returns non-nil on success."
-  (let* ((source (expand-file-name "agent-shell-alert-mac.m"
-                                   (agent-shell-alert--source-directory)))
-         (output (agent-shell-alert--module-path))
-         (emacs-dir (file-name-directory
-                     (directory-file-name invocation-directory)))
-         (include-dir
-          (seq-find
-           (lambda (d) (file-exists-p (expand-file-name "emacs-module.h" d)))
-           (list (expand-file-name "include" emacs-dir)
-                 (expand-file-name "Resources/include" emacs-dir)
-                 (expand-file-name "../include" invocation-directory)))))
-    (when (and (file-exists-p source) include-dir)
-      (zerop
-       (call-process "cc" nil nil nil
-                     "-Wall" "-O2" "-fPIC"
-                     "-shared" "-fobjc-arc"
-                     (concat "-I" include-dir)
-                     "-framework" "UserNotifications"
-                     "-framework" "Foundation"
-                     "-o" output source)))))
-
-(defun agent-shell-alert--try-load-mac-module ()
-  "Try to load the macOS native notification module, compiling if needed.
-Returns non-nil on success."
-  (setq agent-shell-alert--mac-module-tried t)
-  (when (and (eq system-type 'darwin)
-             (display-graphic-p)
-             module-file-suffix
-             (not (fboundp 'agent-shell-alert-mac-notify)))
-    (unless (file-exists-p (agent-shell-alert--module-path))
-      (ignore-errors (agent-shell-alert--compile-mac-module)))
-    (ignore-errors
-      (module-load (agent-shell-alert--module-path)))
-    (if (fboundp 'agent-shell-alert-mac-notify)
-        (condition-case err
-            (when (agent-shell-alert-mac-request-authorization)
-              (setq agent-shell-alert--mac-authorized t))
-          (error
-           (message "agent-shell-alert: native notifications unavailable \
-(%s); falling back to osascript"
-                    (error-message-string err))))
-      (message "agent-shell-alert: native module unavailable; \
-install Xcode command line tools (`xcode-select --install') \
-then run M-x eval (agent-shell-alert--try-load-mac-module) RET \
-to enable native macOS desktop notifications")))
-  agent-shell-alert--mac-authorized)
 
 (defun agent-shell-alert-notify (title body)
   "Send a desktop notification with TITLE and BODY.
 
-In GUI Emacs on macOS, uses native notifications via
-UNUserNotificationCenter.  In terminal Emacs, auto-detects the
-terminal emulator and sends the appropriate OSC escape sequence,
-with tmux DCS passthrough when available.  Falls back to
-osascript on macOS when the terminal is unknown or tmux
-passthrough is not enabled.
+In GUI Emacs on macOS, uses `ns-do-applescript' to run `display
+notification' from within the Emacs process so the notification
+is attributed to Emacs (Emacs icon, click activates Emacs).  In
+terminal Emacs, auto-detects the terminal emulator and sends the
+appropriate OSC escape sequence, with tmux DCS passthrough when
+available.  Falls back to osascript on macOS when the terminal is
+unknown or tmux passthrough is not enabled.
 
   (agent-shell-alert-notify \"agent-shell\" \"Turn complete\")"
-  ;; Lazy-load: if the module hasn't been tried yet and we now have a
-  ;; GUI frame (e.g. emacsclient connecting to a daemon), try loading.
-  (when (and (not agent-shell-alert--mac-module-tried)
-             (eq system-type 'darwin)
-             (display-graphic-p))
-    (agent-shell-alert--try-load-mac-module))
   (cond
-   ((agent-shell-alert--mac-available-p)
+   ;; GUI Emacs on macOS: use ns-do-applescript for Emacs-branded
+   ;; notifications (Emacs icon, click activates Emacs).
+   ((and (eq system-type 'darwin)
+         (display-graphic-p)
+         (fboundp 'ns-do-applescript))
     (condition-case nil
-        (agent-shell-alert-mac-notify title body)
-      (error
-       (setq agent-shell-alert--mac-authorized nil)
-       (agent-shell-alert-notify title body))))
-   ((and (display-graphic-p)
-         (eq system-type 'darwin)
-         (fboundp 'agent-shell-alert-mac-applescript-notify))
-    (condition-case nil
-        (agent-shell-alert-mac-applescript-notify title body)
+        (ns-do-applescript
+         (format "display notification %S with title %S" body title))
       (error
        (agent-shell-alert--osascript-notify title body))))
+   ;; Terminal: try OSC escape sequences for terminal notifications.
    ((not (display-graphic-p))
     (if-let ((payload (agent-shell-alert--osc-payload title body))
              (wrapped (agent-shell-alert--tmux-passthrough payload)))
         (send-string-to-terminal wrapped)
       (when (eq system-type 'darwin)
         (agent-shell-alert--osascript-notify title body))))
+   ;; GUI on macOS without ns-do-applescript (shouldn't happen), or
+   ;; non-macOS GUI: fall back to osascript or just message.
    ((eq system-type 'darwin)
     (agent-shell-alert--osascript-notify title body))))
-
-(agent-shell-alert--try-load-mac-module)
 
 (provide 'agent-shell-alert)
 

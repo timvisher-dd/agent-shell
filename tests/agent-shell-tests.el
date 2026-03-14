@@ -525,6 +525,7 @@
                                   (cons :session (list (cons :id "test-session")))
                                   (cons :last-entry-type nil)
                                   (cons :tool-calls nil)
+                                  (cons :idle-notification-timer nil)
                                   (cons :usage (list (cons :total-tokens 0)))))
         (agent-shell-show-busy-indicator nil)
         (agent-shell-show-usage-at-turn-end nil))
@@ -1924,6 +1925,104 @@ code block content
         (should-not responded)
         (should (equal (map-elt state :last-entry-type) "session/request_permission"))))))
 
+;;; Idle notification tests
+
+(ert-deftest agent-shell--idle-notification-start-sets-timer-and-hook-test ()
+  "Test that `agent-shell--idle-notification-start' sets up timer and hook."
+  (with-temp-buffer
+    (let ((agent-shell-idle-notification-delay 30)
+          (agent-shell--state (list (cons :buffer (current-buffer))
+                                    (cons :idle-notification-timer nil))))
+      (cl-letf (((symbol-function 'agent-shell--state)
+                 (lambda () agent-shell--state)))
+        (agent-shell--idle-notification-start)
+        (should (timerp (map-elt agent-shell--state :idle-notification-timer)))
+        (should (memq #'agent-shell--idle-notification-cancel
+                      (buffer-local-value 'post-command-hook (current-buffer))))
+        (agent-shell--idle-notification-cancel)))))
+
+(ert-deftest agent-shell--idle-notification-cancel-cleans-up-test ()
+  "Test that user input cancels the idle notification timer and hook."
+  (with-temp-buffer
+    (let ((agent-shell-idle-notification-delay 30)
+          (agent-shell--state (list (cons :buffer (current-buffer))
+                                    (cons :idle-notification-timer nil))))
+      (cl-letf (((symbol-function 'agent-shell--state)
+                 (lambda () agent-shell--state)))
+        (agent-shell--idle-notification-start)
+        (let ((timer (map-elt agent-shell--state :idle-notification-timer)))
+          (should (timerp timer))
+          (agent-shell--idle-notification-cancel)
+          (should-not (map-elt agent-shell--state :idle-notification-timer))
+          (should-not (memq #'agent-shell--idle-notification-cancel
+                            (buffer-local-value 'post-command-hook (current-buffer)))))))))
+
+(ert-deftest agent-shell--idle-notification-fire-sends-and-cleans-up-test ()
+  "Test that timer firing sends notification and removes hook."
+  (with-temp-buffer
+    (let ((agent-shell-idle-notification-delay 30)
+          (agent-shell--state (list (cons :buffer (current-buffer))
+                                    (cons :idle-notification-timer nil)))
+          (notified nil)
+          (other-buf (generate-new-buffer " *other*")))
+      (cl-letf (((symbol-function 'agent-shell--state)
+                 (lambda () agent-shell--state))
+                ((symbol-function 'agent-shell-alert-notify)
+                 (lambda (title body)
+                   (setq notified (list title body))))
+                ((symbol-function 'shell-maker-busy)
+                 (lambda () nil))
+                ((symbol-function 'window-buffer)
+                 (lambda (&optional _window) other-buf)))
+        (agent-shell--idle-notification-start)
+        (should (timerp (map-elt agent-shell--state :idle-notification-timer)))
+        (agent-shell--idle-notification-fire)
+        (should (equal notified '("agent-shell" "Prompt is waiting for input")))
+        (should-not (map-elt agent-shell--state :idle-notification-timer))
+        (should-not (memq #'agent-shell--idle-notification-cancel
+                          (buffer-local-value 'post-command-hook (current-buffer)))))
+      (kill-buffer other-buf))))
+
+(ert-deftest agent-shell--idle-notification-fire-skips-message-when-buffer-visible-test ()
+  "Test that message is skipped but OS notification still fires when active."
+  (with-temp-buffer
+    (let ((agent-shell-idle-notification-delay 30)
+          (shell-buf (current-buffer))
+          (agent-shell--state (list (cons :buffer (current-buffer))
+                                    (cons :idle-notification-timer nil)))
+          (notified nil)
+          (messages nil))
+      (cl-letf (((symbol-function 'agent-shell--state)
+                 (lambda () agent-shell--state))
+                ((symbol-function 'agent-shell-alert-notify)
+                 (lambda (title body)
+                   (setq notified (list title body))))
+                ((symbol-function 'shell-maker-busy)
+                 (lambda () nil))
+                ((symbol-function 'window-buffer)
+                 (lambda (&optional _window) shell-buf))
+                ((symbol-function 'message)
+                 (lambda (fmt &rest args)
+                   (push (apply #'format fmt args) messages))))
+        (agent-shell--idle-notification-start)
+        (agent-shell--idle-notification-fire)
+        (should (equal notified '("agent-shell" "Prompt is waiting for input")))
+        (should-not messages)
+        (should-not (map-elt agent-shell--state :idle-notification-timer))))))
+
+(ert-deftest agent-shell--idle-notification-nil-delay-does-nothing-test ()
+  "Test that nil delay means no timer is started."
+  (with-temp-buffer
+    (let ((agent-shell-idle-notification-delay nil)
+          (agent-shell--state (list (cons :buffer (current-buffer))
+                                    (cons :idle-notification-timer nil))))
+      (cl-letf (((symbol-function 'agent-shell--state)
+                 (lambda () agent-shell--state)))
+        (agent-shell--idle-notification-start)
+        (should-not (map-elt agent-shell--state :idle-notification-timer))
+        (should-not (memq #'agent-shell--idle-notification-cancel
+                          (buffer-local-value 'post-command-hook (current-buffer))))))))
+
 (ert-deftest agent-shell-alert--detect-terminal-term-program-test ()
   "Test terminal detection via TERM_PROGRAM."
   (cl-letf (((symbol-function 'getenv)
@@ -2060,15 +2159,17 @@ code block content
     (should-not (agent-shell-alert--tmux-passthrough "\e]9;hi\e\\"))))
 
 (ert-deftest agent-shell-alert-notify-dispatches-to-mac-when-available-test ()
-  "Test that notify dispatches to native macOS when module is loaded."
-  (let ((notified nil))
-    (cl-letf (((symbol-function 'agent-shell-alert--mac-available-p)
-               (lambda () t))
-              ((symbol-function 'agent-shell-alert-mac-notify)
-               (lambda (title body)
-                 (setq notified (list title body)))))
+  "Test that notify dispatches to ns-do-applescript on GUI macOS."
+  (let ((notified nil)
+        (system-type 'darwin))
+    (cl-letf (((symbol-function 'display-graphic-p)
+               (lambda (&rest _) t))
+              ((symbol-function 'ns-do-applescript)
+               (lambda (script)
+                 (setq notified script))))
       (agent-shell-alert-notify "Test" "Hello")
-      (should (equal notified '("Test" "Hello"))))))
+      (should (stringp notified))
+      (should (string-match-p "display notification" notified)))))
 
 (ert-deftest agent-shell-alert-notify-sends-osc-in-known-terminal-test ()
   "Test that notify sends OSC in a known terminal."
