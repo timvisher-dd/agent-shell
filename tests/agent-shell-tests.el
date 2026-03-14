@@ -2118,5 +2118,38 @@ code block content
         (agent-shell-alert-notify "T" "B")
         (should (equal osascript-called '("T" "B")))))))
 
+;;; Debug logging tests
+
+(ert-deftest agent-shell--log-writes-to-buffer-when-enabled-test ()
+  "Test that `agent-shell--log' writes to the per-shell log buffer when enabled."
+  (with-temp-buffer
+    (rename-buffer "*agent-shell test*" t)
+    (let* ((log-buf (agent-shell--make-log-buffer (current-buffer)))
+           (agent-shell-logging-enabled t)
+           (agent-shell--state (list (cons :buffer (current-buffer))
+                                     (cons :log-buffer log-buf))))
+      (cl-letf (((symbol-function 'agent-shell--state)
+                 (lambda () agent-shell--state)))
+        (agent-shell--log "TEST" "hello %s" "world")
+        (with-current-buffer log-buf
+          (should (string-match-p "TEST >" (buffer-string)))
+          (should (string-match-p "hello world" (buffer-string))))
+        (kill-buffer log-buf)))))
+
+(ert-deftest agent-shell--log-does-nothing-when-disabled-test ()
+  "Test that `agent-shell--log' is silent when logging is disabled."
+  (with-temp-buffer
+    (rename-buffer "*agent-shell test*" t)
+    (let* ((log-buf (agent-shell--make-log-buffer (current-buffer)))
+           (agent-shell-logging-enabled nil)
+           (agent-shell--state (list (cons :buffer (current-buffer))
+                                     (cons :log-buffer log-buf))))
+      (cl-letf (((symbol-function 'agent-shell--state)
+                 (lambda () agent-shell--state)))
+        (agent-shell--log "TEST" "should not appear")
+        (with-current-buffer log-buf
+          (should (equal (buffer-string) "")))
+        (kill-buffer log-buf)))))
+
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here
