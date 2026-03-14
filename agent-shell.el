@@ -643,6 +643,111 @@ the session and returns the appropriate endpoint:
   :type '(repeat (choice (alist :key-type symbol :value-type sexp) function))
   :group 'agent-shell)
 
+;;; Debug logging
+
+(defvar agent-shell-logging-enabled nil
+  "When non-nil, write debug messages to the log buffer.")
+
+(defvar agent-shell--log-buffer-max-bytes (* 100 1000 1000)
+  "Maximum size of the log buffer in bytes.")
+
+(defun agent-shell--make-log-buffer (shell-buffer)
+  "Create a log buffer for SHELL-BUFFER.
+The name is derived from SHELL-BUFFER's name at creation time."
+  (let ((name (format "%s log*" (string-remove-suffix
+                                  "*" (buffer-name shell-buffer)))))
+    (with-current-buffer (get-buffer-create name)
+      (buffer-disable-undo)
+      (current-buffer))))
+
+(defun agent-shell--log (label format-string &rest args)
+  "Log message with LABEL using FORMAT-STRING and ARGS.
+Does nothing unless `agent-shell-logging-enabled' is non-nil.
+Must be called from an agent-shell-mode buffer."
+  (when agent-shell-logging-enabled
+    (when-let ((log-buffer (map-elt (agent-shell--state) :log-buffer)))
+      (when (buffer-live-p log-buffer)
+        (let ((body (apply #'format format-string args)))
+          (with-current-buffer log-buffer
+            (goto-char (point-max))
+            (let ((entry-start (point)))
+              (insert (if label
+                          (format "%s >\n\n%s\n\n" label body)
+                        (format "%s\n\n" body)))
+              (when (< entry-start (point))
+                (add-text-properties entry-start (1+ entry-start)
+                                     '(agent-shell-log-boundary t)))))
+          (agent-shell--trim-log-buffer log-buffer))))))
+
+(defun agent-shell--trim-log-buffer (buffer)
+  "Trim BUFFER to `agent-shell--log-buffer-max-bytes' at message boundaries."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (save-excursion
+        (let ((total-bytes (1- (position-bytes (point-max)))))
+          (when (< agent-shell--log-buffer-max-bytes total-bytes)
+            (goto-char (byte-to-position (- total-bytes agent-shell--log-buffer-max-bytes)))
+            (when (get-text-property (point) 'agent-shell-log-boundary)
+              (forward-char 1))
+            (delete-region (point-min)
+                           (next-single-property-change
+                            (point) 'agent-shell-log-boundary nil (point-max)))))))))
+
+(defun agent-shell--save-buffer-to-file (buffer file)
+  "Write contents of BUFFER to FILE if BUFFER is live and non-empty."
+  (when (and (buffer-live-p buffer)
+             (< 0 (buffer-size buffer)))
+    (with-current-buffer buffer
+      (save-restriction
+        (widen)
+        (write-region (point-min) (point-max) file)))
+    t))
+
+(defun agent-shell-debug-save-to (directory)
+  "Save debug buffers for the current shell to DIRECTORY.
+When called interactively, prompts for a directory.
+
+Writes the following files:
+  log.txt        - agent-shell log buffer contents
+  shell.txt      - shell buffer contents
+  messages.txt   - *Messages* buffer contents"
+  (interactive
+   (list (read-directory-name "Save debug logs to: "
+                              (expand-file-name
+                               (format "agent-shell-debug-%s/"
+                                       (format-time-string "%Y%m%d-%H%M%S"))
+                               temporary-file-directory))))
+  (unless directory
+    (error "directory is required"))
+  (let ((directory (file-name-as-directory (expand-file-name directory)))
+        (saved-files nil))
+    (make-directory directory t)
+    (when (agent-shell--save-buffer-to-file
+           (map-elt (agent-shell--state) :log-buffer)
+           (expand-file-name "log.txt" directory))
+      (push "log.txt" saved-files))
+    (when (agent-shell--save-buffer-to-file
+           (map-elt (agent-shell--state) :buffer)
+           (expand-file-name "shell.txt" directory))
+      (push "shell.txt" saved-files))
+    (when (agent-shell--save-buffer-to-file
+           (get-buffer "*Messages*")
+           (expand-file-name "messages.txt" directory))
+      (push "messages.txt" saved-files))
+    (when-let ((client (map-elt (agent-shell--state) :client)))
+      (when (agent-shell--save-buffer-to-file
+             (acp-traffic-buffer :client client)
+             (expand-file-name "traffic.txt" directory))
+        (push "traffic.txt" saved-files))
+      (when (agent-shell--save-buffer-to-file
+             (acp-logs-buffer :client client)
+             (expand-file-name "acp-log.txt" directory))
+        (push "acp-log.txt" saved-files)))
+    (if saved-files
+        (message "Saved %s to %s" (string-join (nreverse saved-files) ", ") directory)
+      (message "No debug data to save"))
+    directory))
+
 (cl-defun agent-shell--make-state (&key agent-config buffer client-maker needs-authentication authenticate-request-maker heartbeat outgoing-request-decorator)
   "Construct shell agent state with AGENT-CONFIG and BUFFER.
 
@@ -651,6 +756,7 @@ HEARTBEAT, AUTHENTICATE-REQUEST-MAKER, and optionally
 OUTGOING-REQUEST-DECORATOR (passed through to `acp-make-client')."
   (list (cons :agent-config agent-config)
         (cons :buffer buffer)
+        (cons :log-buffer (when buffer (agent-shell--make-log-buffer buffer)))
         (cons :client nil)
         (cons :client-maker client-maker)
         (cons :outgoing-request-decorator outgoing-request-decorator)
