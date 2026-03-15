@@ -7,6 +7,35 @@ on:
     branches: [main]
 
 jobs:
+  readme-updated:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check README.org updated when code changes
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          changed_files=$(git diff --name-only "$base" "$head")
+
+          has_code_changes=false
+          for f in $changed_files; do
+            case "$f" in
+              *.el|tests/*) has_code_changes=true; break ;;
+            esac
+          done
+
+          if "$has_code_changes"; then
+            if ! echo "$changed_files" | grep -q '^README\.org$'; then
+              echo "::error::Code or test files changed but README.org was not updated."
+              echo "Please update the soft-fork features list in README.org."
+              exit 1
+            fi
+          fi
+
   test:
     runs-on: ubuntu-latest
     steps:

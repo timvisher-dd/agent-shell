@@ -8,6 +8,7 @@ A soft fork of [[https://github.com/xenodium/agent-shell][agent-shell]] with ext
 - CI workflow and local test runner ([[https://github.com/timvisher-dd/agent-shell-plus/pull/1][#1]])
 - Desktop notifications when the prompt is idle and waiting for input ([[https://github.com/timvisher-dd/agent-shell-plus/pull/2][#2]])
 - Per-shell debug logging infrastructure ([[https://github.com/timvisher-dd/agent-shell-plus/pull/2][#2]])
+- CI check that README.org is updated when code changes ([[https://github.com/timvisher-dd/agent-shell-plus/pull/4][#4]])
 
 -----
 
