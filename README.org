@@ -11,6 +11,8 @@ A soft fork of [[https://github.com/xenodium/agent-shell][agent-shell]] with ext
 - Regression tests for shell buffer selection ordering ([[https://github.com/timvisher-dd/agent-shell-plus/pull/3][#3]])
 - CI check that README.org is updated when code changes ([[https://github.com/timvisher-dd/agent-shell-plus/pull/4][#4]])
 - Usage tests and defense against ACP =used > size= bug ([[https://github.com/timvisher-dd/agent-shell-plus/pull/5][#5]])
+- Streaming tool output with dedup: advertise =_meta.terminal_output= capability, handle incremental chunks from codex-acp and batch results from claude-agent-acp, strip =<persisted-output>= tags, and fix O(n²) rendering ([[https://github.com/timvisher-dd/agent-shell-plus/pull/7][#7]])
+- DWIM context insertion: inserted context lands at the prompt and fragment updates no longer drag process-mark past it ([[https://github.com/timvisher-dd/agent-shell-plus/pull/7][#7]])
 
 -----
 
