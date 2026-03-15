@@ -7,7 +7,7 @@
 # …/shell-maker/main
 root=$(dirname "$0")/..
 tests_dir=${root}/tests
-acp_root=${acp_root:-${root}/../../acp.el/main}
+acp_root=${acp_root:-${root}/../../acp.el-plus/main}
 shell_maker_root=${shell_maker_root:-${root}/../../shell-maker/main}
 
 if ! [[ -r ${acp_root}/acp.el ]]
