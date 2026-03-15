@@ -2626,17 +2626,16 @@ variable (see makunbound)"))
     (agent-shell-ui-delete-fragment :namespace-id (map-elt state :request-count) :block-id block-id :no-undo t)))
 
 (defmacro agent-shell--with-preserved-process-mark (&rest body)
-  "Evaluate BODY, then restore the process-mark to its post-BODY position.
-The saved marker uses insertion-type t so that text inserted at the
-marker position advances it.  This means content inserted before the
-prompt (at the process-mark) correctly pushes the process-mark forward,
-while insertions after the prompt leave it unchanged."
+  "Evaluate BODY, then restore process-mark to its pre-BODY position.
+Fragment updates insert text before the process-mark (above the prompt),
+so the saved marker uses insertion-type nil to stay anchored while the
+live process-mark is pushed forward by the insertion."
   (declare (indent 0) (debug body))
   (let ((proc-sym (make-symbol "proc"))
         (saved-sym (make-symbol "saved-pmark")))
     `(let* ((,proc-sym (get-buffer-process (current-buffer)))
             (,saved-sym (when ,proc-sym
-                          (copy-marker (process-mark ,proc-sym) t))))
+                          (copy-marker (process-mark ,proc-sym)))))
        (unwind-protect
            (progn ,@body)
          (when ,saved-sym
