@@ -50,7 +50,7 @@ NAMESPACE-ID, BLOCK-ID, LABEL-LEFT, LABEL-RIGHT, and BODY are the keys."
         (cons :label-right (agent-shell-ui--string-or-nil label-right))
         (cons :body (agent-shell-ui--string-or-nil body))))
 
-(cl-defun agent-shell-ui-update-fragment (model &key append create-new on-post-process navigation expanded no-undo)
+(cl-defun agent-shell-ui-update-fragment (model &key append create-new on-post-process navigation expanded no-undo insert-before)
   "Update or add a fragment using MODEL.
 
 When APPEND is non-nil, append to body instead of replacing.
@@ -61,6 +61,9 @@ When NAVIGATION is `auto', block is navigatable if non-empty body.
 When NAVIGATION is `always', block is always TAB navigatable.
 When EXPANDED is non-nil, body will be expanded by default.
 When NO-UNDO is non-nil, disable undo recording for this operation.
+When INSERT-BEFORE is a buffer position, new blocks are inserted
+before that position instead of at the end of the buffer.  This
+keeps content above the shell prompt when user input is pending.
 
 For existing blocks, the current expansion state is preserved unless overridden."
   (save-mark-and-excursion
@@ -85,41 +88,96 @@ For existing blocks, the current expansion state is preserved unless overridden.
         (when match
           (goto-char (prop-match-beginning match)))
         (if (and match (not create-new))
-            ;; Found existing block - delete and regenerate
             (let* ((existing-model (agent-shell-ui--read-fragment-at-point))
                    (state (get-text-property (point) 'agent-shell-ui-state))
                    (existing-body (map-elt existing-model :body))
-                   (block-end (prop-match-end match))
-                   (final-body (if new-body
-                                   (if (and append existing-body)
-                                       (concat existing-body new-body)
-                                     new-body)
-                                 existing-body))
-                   (final-model (list (cons :namespace-id namespace-id)
-                                      (cons :block-id (map-elt model :block-id))
-                                      (cons :label-left (or new-label-left
-                                                            (map-elt existing-model :label-left)))
-                                      (cons :label-right (or new-label-right
-                                                             (map-elt existing-model :label-right)))
-                                      (cons :body final-body))))
+                   (block-end (prop-match-end match)))
               (setq block-start (prop-match-beginning match))
-
-              ;; Safely replace existing block using narrow-to-region
               (save-excursion
                 (goto-char block-start)
                 (skip-chars-backward "\n")
                 (setq padding-start (point)))
-
-              ;; Replace block
-              (delete-region block-start block-end)
-              (goto-char block-start)
-              (agent-shell-ui--insert-fragment final-model qualified-id
-                                               (not (map-elt state :collapsed))
-                                               navigation)
-              (setq padding-end (point)))
+              (if (and append new-body
+                       existing-body (not (string-empty-p existing-body))
+                       (not new-label-left)
+                       (not new-label-right))
+                  ;; Append in-place: insert only new body text,
+                  ;; avoiding the delete-and-reinsert that displaces point.
+                  (let* ((body-range (agent-shell-ui--nearest-range-matching-property
+                                      :property 'agent-shell-ui-section :value 'body
+                                      :from block-start :to block-end))
+                         (old-body-start (map-elt body-range :start))
+                         (old-body-end (map-elt body-range :end))
+                         (body-text new-body))
+                    ;; Normalize trailing whitespace only.  Do NOT
+                    ;; strip leading newlines here — unlike the initial
+                    ;; insert (where \n\n is already placed between
+                    ;; label and body), appended chunks carry meaningful
+                    ;; leading newlines (list-item separators, paragraph
+                    ;; breaks, etc.).
+                    (when (string-suffix-p "\n\n" body-text)
+                      (setq body-text (concat (string-trim-right body-text) "\n\n")))
+                    (if (map-elt state :collapsed)
+                        ;; Collapsed: insert-and-inherit picks up invisible
+                        ;; from existing body via stickiness.
+                        (progn
+                          (goto-char old-body-end)
+                          (insert-and-inherit (agent-shell-ui--indent-text
+                                              (string-remove-prefix "  " body-text) "  ")))
+                      ;; Expanded: un-hide old trailing whitespace (no longer
+                      ;; trailing), insert, re-hide new trailing whitespace.
+                      (remove-text-properties old-body-start old-body-end
+                                              '(invisible nil))
+                      (goto-char old-body-end)
+                      (insert-and-inherit (agent-shell-ui--indent-text
+                               (string-remove-prefix "  " body-text) "  "))
+                      (let ((new-body-end (point)))
+                        (save-mark-and-excursion
+                          (goto-char new-body-end)
+                          (when (re-search-backward "[^ \t\n]" old-body-start t)
+                            (forward-char 1)
+                            (when (< (point) new-body-end)
+                              (add-text-properties (point) new-body-end
+                                                   '(invisible t)))))))
+                    (let ((new-body-end (point)))
+                      ;; Extend block-level properties to cover new text
+                      (put-text-property block-start new-body-end
+                                         'agent-shell-ui-state
+                                         (get-text-property block-start 'agent-shell-ui-state))
+                      (put-text-property block-start new-body-end 'read-only t)
+                      (put-text-property block-start new-body-end 'front-sticky '(read-only))
+                      ;; Update content-store
+                      (unless agent-shell-ui--content-store
+                        (setq agent-shell-ui--content-store (make-hash-table :test 'equal)))
+                      (puthash (concat qualified-id "-body")
+                               (concat existing-body new-body)
+                               agent-shell-ui--content-store)
+                      (setq padding-end new-body-end)))
+                ;; Full rebuild: delete and regenerate (label change, first
+                ;; body content, or non-append replacement).
+                (let* ((final-body (if new-body
+                                       (if (and append existing-body)
+                                           (concat existing-body new-body)
+                                         new-body)
+                                     existing-body))
+                       (final-model (list (cons :namespace-id namespace-id)
+                                          (cons :block-id (map-elt model :block-id))
+                                          (cons :label-left (or new-label-left
+                                                                (map-elt existing-model :label-left)))
+                                          (cons :label-right (or new-label-right
+                                                                 (map-elt existing-model :label-right)))
+                                          (cons :body final-body))))
+                  (delete-region block-start block-end)
+                  (goto-char block-start)
+                  (agent-shell-ui--insert-fragment final-model qualified-id
+                                                   (not (map-elt state :collapsed))
+                                                   navigation)
+                  (setq padding-end (point)))))
 
           ;; Not found or create-new - insert new block
-          (goto-char (point-max))
+          (goto-char (if insert-before
+                         (min insert-before (point-max))
+                       (point-max)))
           (setq padding-start (point))
           (insert (agent-shell-ui--required-newlines 2))
           (setq block-start (point))
@@ -384,7 +442,8 @@ NAVIGATION controls navigability:
                             ;; Use agent-shell-ui--content-store for these instances.
                             ;; For example, fragment body.
                             (cons :qualified-id qualified-id)
-                            (cons :collapsed (not expanded))
+                            (cons :collapsed (and (or label-left label-right)
+                                                    (not expanded)))
                             (cons :navigatable (cond
                                                 ((eq navigation 'never) nil)
                                                 ((eq navigation 'always) t)
@@ -396,13 +455,15 @@ NAVIGATION controls navigability:
     (put-text-property block-start (or body-end label-right-end label-left-end) 'read-only t)
     (put-text-property block-start (or body-end label-right-end label-left-end) 'front-sticky '(read-only))))
 
-(cl-defun agent-shell-ui-update-text (&key namespace-id block-id text append create-new no-undo)
+(cl-defun agent-shell-ui-update-text (&key namespace-id block-id text append create-new no-undo insert-before)
   "Update or insert a plain text entry identified by NAMESPACE-ID and BLOCK-ID.
 
 TEXT is the string to insert or append.
 When APPEND is non-nil, append TEXT to existing entry.
 When CREATE-NEW is non-nil, always create a new entry.
-When NO-UNDO is non-nil, disable undo recording."
+When NO-UNDO is non-nil, disable undo recording.
+When INSERT-BEFORE is a buffer position, new entries are inserted
+before that position instead of at the end of the buffer."
   (save-mark-and-excursion
     (let* ((inhibit-read-only t)
            (buffer-undo-list (if no-undo t buffer-undo-list))
@@ -442,7 +503,9 @@ When NO-UNDO is non-nil, disable undo recording."
                                        (cons :end (point)))))))
          ;; New entry.
          (t
-          (goto-char (point-max))
+          (goto-char (if insert-before
+                         (min insert-before (point-max))
+                       (point-max)))
           (let ((padding-start (point)))
             (insert (agent-shell-ui--required-newlines 2))
             (let ((block-start (point)))

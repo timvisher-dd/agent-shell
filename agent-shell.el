@@ -72,6 +72,7 @@
 (require 'agent-shell-styles)
 (require 'agent-shell-usage)
 (require 'agent-shell-worktree)
+(require 'agent-shell-streaming)
 (require 'agent-shell-ui)
 (require 'agent-shell-viewport)
 (require 'image)
@@ -328,14 +329,12 @@ Can be one of:
                  (const :tag "No header" nil))
   :group 'agent-shell)
 
-(defcustom agent-shell-show-session-id nil
+(defvar agent-shell-show-session-id nil
   "Non-nil to display the session ID in the header and session selection.
 
 When enabled, the session ID is shown after the directory path in the
 header and as an additional column in the session selection prompt.
-Only appears when a session is active."
-  :type 'boolean
-  :group 'agent-shell)
+Only appears when a session is active.")
 
 (defcustom agent-shell-show-welcome-message t
   "Non-nil to show welcome message."
@@ -773,6 +772,7 @@ OUTGOING-REQUEST-DECORATOR (passed through to `acp-make-client')."
                              (cons :modes nil)))
         (cons :last-entry-type nil)
         (cons :chunked-group-count 0)
+        (cons :thought-accumulated nil)
         (cons :request-count 0)
         (cons :tool-calls nil)
         (cons :available-commands nil)
@@ -1166,7 +1166,7 @@ and END from the buffer."
   "C-c C-o" #'agent-shell-other-buffer
   "<remap> <yank>" #'agent-shell-yank-dwim)
 
-(shell-maker-define-major-mode (agent-shell--make-shell-maker-config) agent-shell-mode-map)
+(shell-maker-define-major-mode (agent-shell--make-shell-maker-config) 'agent-shell-mode-map)
 
 (cl-defun agent-shell--handle (&key command shell-buffer)
   "Handle SHELL-BUFFER COMMAND (and lazy initialize the ACP stack).
@@ -1428,28 +1428,34 @@ COMMAND, when present, may be a shell command string or an argv vector."
                         agent-shell-thought-process-icon
                         (propertize "Thought process" 'face font-lock-doc-markup-face)
                         (truncate-string-to-width (map-nested-elt acp-notification '(params update content text)) 100))
-             (unless (equal (map-elt state :last-entry-type)
-                            "agent_thought_chunk")
-               (map-put! state :chunked-group-count (1+ (map-elt state :chunked-group-count)))
-               (agent-shell--append-transcript
-                :text (format "## Agent's Thoughts (%s)\n\n" (format-time-string "%F %T"))
-                :file-path agent-shell--transcript-file))
-             (agent-shell--append-transcript
-              :text (agent-shell--indent-markdown-headers
-                     (map-nested-elt acp-notification '(params update content text)))
-              :file-path agent-shell--transcript-file)
-             (agent-shell--update-fragment
-              :state state
-              :block-id (format "%s-agent_thought_chunk"
-                                (map-elt state :chunked-group-count))
-              :label-left  (concat
-                            agent-shell-thought-process-icon
-                            " "
-                            (propertize "Thought process" 'font-lock-face font-lock-doc-markup-face))
-              :body (map-nested-elt acp-notification '(params update content text))
-              :append (equal (map-elt state :last-entry-type)
-                             "agent_thought_chunk")
-              :expanded agent-shell-thought-process-expand-by-default)
+             (let ((new-group (not (equal (map-elt state :last-entry-type)
+                                          "agent_thought_chunk"))))
+               (when new-group
+                 (map-put! state :chunked-group-count (1+ (map-elt state :chunked-group-count)))
+                 (map-put! state :thought-accumulated nil)
+                 (agent-shell--append-transcript
+                  :text (format "## Agent's Thoughts (%s)\n\n" (format-time-string "%F %T"))
+                  :file-path agent-shell--transcript-file))
+               (let ((delta (agent-shell--thought-chunk-delta
+                             (map-elt state :thought-accumulated)
+                             (map-nested-elt acp-notification '(params update content text)))))
+                 (map-put! state :thought-accumulated
+                           (concat (or (map-elt state :thought-accumulated) "") delta))
+                 (when (and delta (not (string-empty-p delta)))
+                   (agent-shell--append-transcript
+                    :text delta
+                    :file-path agent-shell--transcript-file)
+                   (agent-shell--update-fragment
+                    :state state
+                    :block-id (format "%s-agent_thought_chunk"
+                                      (map-elt state :chunked-group-count))
+                    :label-left  (concat
+                                  agent-shell-thought-process-icon
+                                  " "
+                                  (propertize "Thought process" 'font-lock-face font-lock-doc-markup-face))
+                    :body delta
+                    :append (not new-group)
+                    :expanded agent-shell-thought-process-expand-by-default))))
              (map-put! state :last-entry-type "agent_thought_chunk")))
           ((equal (map-nested-elt acp-notification '(params update sessionUpdate)) "agent_message_chunk")
            ;; Notification is out of context (session/prompt finished).
@@ -1564,63 +1570,7 @@ COMMAND, when present, may be a shell command string or an argv vector."
               :event 'tool-call-update
               :data (list (cons :tool-call-id (map-nested-elt acp-notification '(params update toolCallId)))
                           (cons :tool-call (map-nested-elt state `(:tool-calls ,(map-nested-elt acp-notification '(params update toolCallId)))))))
-             (let* ((diff (map-nested-elt state `(:tool-calls ,(map-nested-elt acp-notification '(params update toolCallId)) :diff)))
-                    (output (concat
-                             "\n\n"
-                             ;; TODO: Consider if there are other
-                             ;; types of content to display.
-                             (mapconcat (lambda (item)
-                                          (map-nested-elt item '(content text)))
-                                        (map-nested-elt acp-notification '(params update content))
-                                        "\n\n")
-                             "\n\n"))
-                    (diff-text (agent-shell--format-diff-as-text diff))
-                    (body-text (if diff-text
-                                   (concat output
-                                           "\n\n"
-                                           "╭─────────╮\n"
-                                           "│ changes │\n"
-                                           "╰─────────╯\n\n" diff-text)
-                                 output)))
-               ;; Log tool call to transcript when completed or failed
-               (when (and (map-nested-elt acp-notification '(params update status))
-                          (member (map-nested-elt acp-notification '(params update status)) '("completed" "failed")))
-                 (agent-shell--append-transcript
-                  :text (agent-shell--make-transcript-tool-call-entry
-                         :status (map-nested-elt acp-notification '(params update status))
-                         :title (map-nested-elt state `(:tool-calls ,(map-nested-elt acp-notification '(params update toolCallId)) :title))
-                         :kind (map-nested-elt state `(:tool-calls ,(map-nested-elt acp-notification '(params update toolCallId)) :kind))
-                         :description (map-nested-elt state `(:tool-calls ,(map-nested-elt acp-notification '(params update toolCallId)) :description))
-                         :command (map-nested-elt state `(:tool-calls ,(map-nested-elt acp-notification '(params update toolCallId)) :command))
-                         :parameters (agent-shell--extract-tool-parameters
-                                      (map-nested-elt state `(:tool-calls ,(map-nested-elt acp-notification '(params update toolCallId)) :raw-input)))
-                         :output body-text)
-                  :file-path agent-shell--transcript-file))
-               ;; Hide permission after sending response.
-               ;; Status is completed or failed so the user
-               ;; likely selected one of: accepted/rejected/always.
-               ;; Remove stale permission dialog.
-               (when (member (map-nested-elt acp-notification '(params update status))
-                             '("completed" "failed"))
-                 ;; block-id must be the same as the one used as
-                 ;; agent-shell--update-fragment param by "session/request_permission".
-                 (agent-shell--delete-fragment :state state :block-id (format "permission-%s" (map-nested-elt acp-notification '(params update toolCallId)))))
-               (let* ((tool-call-labels (agent-shell-make-tool-call-label state (map-nested-elt acp-notification '(params update toolCallId))))
-                      (saved-command (map-nested-elt state `(:tool-calls
-                                                             ,(map-nested-elt acp-notification '(params update toolCallId))
-                                                             :command)))
-                      ;; Prepend fenced command to body.
-                      (command-block (when saved-command
-                                      (concat "```console\n" saved-command "\n```"))))
-                 (agent-shell--update-fragment
-                  :state state
-                  :block-id (map-nested-elt acp-notification '(params update toolCallId))
-                  :label-left (map-elt tool-call-labels :status)
-                  :label-right (map-elt tool-call-labels :title)
-                  :body (if command-block
-                            (concat command-block "\n\n" (string-trim body-text))
-                          (string-trim body-text))
-                  :expanded agent-shell-tool-use-expand-by-default)))
+             (agent-shell--handle-tool-call-update-streaming state (map-nested-elt acp-notification '(params update)))
              (map-put! state :last-entry-type "tool_call_update")))
           ((equal (map-nested-elt acp-notification '(params update sessionUpdate)) "available_commands_update")
            (map-put! state :available-commands (map-nested-elt acp-notification '(params update availableCommands)))
@@ -2675,6 +2625,64 @@ variable (see makunbound)"))
       (error "Editing the wrong buffer: %s" (current-buffer)))
     (agent-shell-ui-delete-fragment :namespace-id (map-elt state :request-count) :block-id block-id :no-undo t)))
 
+(defmacro agent-shell--with-preserved-process-mark (&rest body)
+  "Evaluate BODY, then restore process-mark to its pre-BODY position.
+Fragment updates insert text before the process-mark (above the prompt),
+so the saved marker uses insertion-type nil to stay anchored while the
+live process-mark is pushed forward by the insertion."
+  (declare (indent 0) (debug body))
+  (let ((proc-sym (make-symbol "proc"))
+        (saved-sym (make-symbol "saved-pmark")))
+    `(let* ((,proc-sym (get-buffer-process (current-buffer)))
+            (,saved-sym (when ,proc-sym
+                          (copy-marker (process-mark ,proc-sym)))))
+       (unwind-protect
+           (progn ,@body)
+         (when ,saved-sym
+           (set-marker (process-mark ,proc-sym) ,saved-sym)
+           (set-marker ,saved-sym nil))))))
+
+(defvar agent-shell--markdown-overlay-debounce-delay 0.15
+  "Idle time in seconds before applying markdown overlays during streaming.")
+
+(defvar-local agent-shell--markdown-overlay-timer nil
+  "Idle timer for debounced markdown overlay processing.")
+
+(defun agent-shell--apply-markdown-overlays (range)
+  "Apply markdown overlays to body and right label in RANGE."
+  (when-let ((body-start (map-nested-elt range '(:body :start)))
+             (body-end (map-nested-elt range '(:body :end))))
+    (narrow-to-region body-start body-end)
+    (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
+      (markdown-overlays-put))
+    (widen))
+  ;; Note: skipping markdown overlays on left labels as
+  ;; they carry propertized text for statuses (boxed).
+  (when-let ((label-right-start (map-nested-elt range '(:label-right :start)))
+             (label-right-end (map-nested-elt range '(:label-right :end))))
+    (narrow-to-region label-right-start label-right-end)
+    (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
+      (markdown-overlays-put))
+    (widen)))
+
+(defun agent-shell--schedule-markdown-overlays (buffer range)
+  "Schedule markdown overlay processing for RANGE in BUFFER at idle time.
+Cancels any pending timer so only the latest range is processed."
+  (with-current-buffer buffer
+    (when (timerp agent-shell--markdown-overlay-timer)
+      (cancel-timer agent-shell--markdown-overlay-timer))
+    (setq agent-shell--markdown-overlay-timer
+          (run-with-idle-timer
+           agent-shell--markdown-overlay-debounce-delay nil
+           (lambda ()
+             (when (buffer-live-p buffer)
+               (with-current-buffer buffer
+                 (save-excursion
+                   (save-restriction
+                     (let ((inhibit-read-only t))
+                       (agent-shell--apply-markdown-overlays range))))
+                 (setq agent-shell--markdown-overlay-timer nil))))))))
+
 (cl-defun agent-shell--update-fragment (&key state namespace-id block-id label-left label-right
                                              body append create-new navigation expanded
                                              render-body-images)
@@ -2765,8 +2773,9 @@ by default, RENDER-BODY-IMAGES to enable inline image rendering in body."
                  (equal (current-buffer)
                         (map-elt state :buffer)))
       (error "Editing the wrong buffer: %s" (current-buffer)))
-    (shell-maker-with-auto-scroll-edit
-     (when-let* ((range (agent-shell-ui-update-fragment
+    (agent-shell--with-preserved-process-mark
+      (shell-maker-with-auto-scroll-edit
+       (when-let* ((range (agent-shell-ui-update-fragment
                          (agent-shell-ui-make-fragment-model
                           :namespace-id (or namespace-id
                                             (map-elt state :request-count))
@@ -2778,40 +2787,29 @@ by default, RENDER-BODY-IMAGES to enable inline image rendering in body."
                          :append append
                          :create-new create-new
                          :expanded expanded
-                         :no-undo t))
+                         :no-undo t
+                         :insert-before (when-let ((proc (get-buffer-process (current-buffer))))
+                                          (process-mark proc))))
                  (padding-start (map-nested-elt range '(:padding :start)))
                  (padding-end (map-nested-elt range '(:padding :end)))
                  (block-start (map-nested-elt range '(:block :start)))
                  (block-end (map-nested-elt range '(:block :end))))
-       (save-restriction
-         ;; TODO: Move this to shell-maker?
-         (let ((inhibit-read-only t))
-           ;; comint relies on field property to
-           ;; derive `comint-next-prompt'.
-           ;; Marking as field to avoid false positives in
-           ;; `agent-shell-next-item' and `agent-shell-previous-item'.
-           (add-text-properties (or padding-start block-start)
-                                (or padding-end block-end) '(field output)))
-         ;; Apply markdown overlay to body.
-         (when-let ((body-start (map-nested-elt range '(:body :start)))
-                    (body-end (map-nested-elt range '(:body :end))))
-           (narrow-to-region body-start body-end)
-           (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
-             (markdown-overlays-put))
-           (widen))
-         ;;
-         ;; Note: For now, we're skipping applying markdown overlays
-         ;; on left labels as they currently carry propertized text
-         ;; for statuses (ie. boxed).
-         ;;
-         ;; Apply markdown overlay to right label.
-         (when-let ((label-right-start (map-nested-elt range '(:label-right :start)))
-                    (label-right-end (map-nested-elt range '(:label-right :end))))
-           (narrow-to-region label-right-start label-right-end)
-           (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks))
-             (markdown-overlays-put))
-           (widen)))
-       (run-hook-with-args 'agent-shell-section-functions range)))))
+       ;; markdown-overlays-put moves point (its parsers use
+       ;; goto-char), so save-excursion keeps point stable.
+       (save-excursion
+         (save-restriction
+           (let ((inhibit-read-only t))
+             (add-text-properties (or padding-start block-start)
+                                  (or padding-end block-end) '(field output)))
+           ;; Apply markdown overlays.  During streaming appends the
+           ;; full re-parse is expensive (O(n) per chunk → O(n²)
+           ;; overall), so debounce to idle time.  Non-append updates
+           ;; (new blocks, label changes) run synchronously.
+           (if append
+               (agent-shell--schedule-markdown-overlays
+                (current-buffer) range)
+             (agent-shell--apply-markdown-overlays range))))
+       (run-hook-with-args 'agent-shell-section-functions range))))))
 
 (cl-defun agent-shell--update-text (&key state namespace-id block-id text append create-new)
   "Update plain text entry in the shell buffer.
@@ -2837,18 +2835,21 @@ APPEND and CREATE-NEW control update behavior."
            :create-new create-new
            :no-undo t))))
     (with-current-buffer (map-elt state :buffer)
-      (shell-maker-with-auto-scroll-edit
-       (when-let* ((range (agent-shell-ui-update-text
-                           :namespace-id ns
-                           :block-id block-id
-                           :text text
-                           :append append
-                           :create-new create-new
-                           :no-undo t))
-                   (block-start (map-nested-elt range '(:block :start)))
-                   (block-end (map-nested-elt range '(:block :end))))
-         (let ((inhibit-read-only t))
-           (add-text-properties block-start block-end '(field output))))))))
+      (agent-shell--with-preserved-process-mark
+        (shell-maker-with-auto-scroll-edit
+         (when-let* ((range (agent-shell-ui-update-text
+                             :namespace-id ns
+                             :block-id block-id
+                             :text text
+                             :append append
+                             :create-new create-new
+                             :no-undo t
+                             :insert-before (when-let ((proc (get-buffer-process (current-buffer))))
+                                              (process-mark proc))))
+                     (block-start (map-nested-elt range '(:block :start)))
+                     (block-end (map-nested-elt range '(:block :end))))
+           (let ((inhibit-read-only t))
+             (add-text-properties block-start block-end '(field output)))))))))
 
 (defun agent-shell-toggle-logging ()
   "Toggle logging."
@@ -3663,7 +3664,8 @@ Must provide ON-INITIATED (lambda ())."
                             (title . "Emacs Agent Shell")
                             (version . ,agent-shell--version))
              :read-text-file-capability agent-shell-text-file-capabilities
-             :write-text-file-capability agent-shell-text-file-capabilities)
+             :write-text-file-capability agent-shell-text-file-capabilities
+             :meta-capabilities '((terminal_output . t)))
    :on-success (lambda (acp-response)
                  (with-current-buffer shell-buffer
                    (let ((acp-session-capabilities (or (map-elt acp-response 'sessionCapabilities)
@@ -5424,6 +5426,7 @@ Returns an alist with insertion details or nil otherwise:
                 (let ((markdown-overlays-highlight-blocks agent-shell-highlight-blocks)
                       (markdown-overlays-render-images nil))
                   (markdown-overlays-put))))
+            (goto-char insert-start)
             (when submit
               (shell-maker-submit)))
           `((:buffer . ,shell-buffer)
