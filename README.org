@@ -10,6 +10,7 @@ A soft fork of [[https://github.com/xenodium/agent-shell][agent-shell]] with ext
 - Per-shell debug logging infrastructure ([[https://github.com/timvisher-dd/agent-shell-plus/pull/2][#2]])
 - Regression tests for shell buffer selection ordering ([[https://github.com/timvisher-dd/agent-shell-plus/pull/3][#3]])
 - CI check that README.org is updated when code changes ([[https://github.com/timvisher-dd/agent-shell-plus/pull/4][#4]])
+- Usage tests and defense against ACP =used > size= bug ([[https://github.com/timvisher-dd/agent-shell-plus/pull/5][#5]])
 
 -----
 
