@@ -1,5 +1,15 @@
 #+TITLE: Emacs Agent Shell
-#+AUTHOR: Álvaro Ramírez
+#+AUTHOR: Tim Visher
+
+A soft fork of [[https://github.com/xenodium/agent-shell][agent-shell]] with extra features on top.
+
+* Features on top of agent-shell
+
+- CI workflow and local test runner ([[https://github.com/timvisher-dd/agent-shell-plus/pull/1][#1]])
+- Desktop notifications when the prompt is idle and waiting for input ([[https://github.com/timvisher-dd/agent-shell-plus/pull/2][#2]])
+- Per-shell debug logging infrastructure ([[https://github.com/timvisher-dd/agent-shell-plus/pull/2][#2]])
+
+-----
 
 [[https://melpa.org/#/agent-shell][file:https://melpa.org/packages/agent-shell-badge.svg]]
 
