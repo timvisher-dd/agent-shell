@@ -39,6 +39,8 @@
 (require 'seq)
 
 (declare-function agent-shell-alert-mac-notify "agent-shell-alert-mac")
+(declare-function agent-shell-alert-mac-request-authorization "agent-shell-alert-mac")
+(declare-function agent-shell-alert-mac-applescript-notify "agent-shell-alert-mac")
 
 (defvar agent-shell-alert--source-dir
   (file-name-directory (or load-file-name buffer-file-name))
@@ -47,6 +49,10 @@ Captured at load time so it remains correct after loading.")
 
 (defvar agent-shell-alert--mac-authorized nil
   "Non-nil when native macOS notifications are authorized and working.")
+
+(defvar agent-shell-alert--mac-module-tried nil
+  "Non-nil after the first attempt to load the native module.
+Prevents repeated compilation/load attempts on every notification.")
 
 (defvar agent-shell-alert--osascript-warned nil
   "Non-nil after the osascript fallback warning has been shown.")
@@ -220,12 +226,13 @@ Returns non-nil on success."
 (defun agent-shell-alert--try-load-mac-module ()
   "Try to load the macOS native notification module, compiling if needed.
 Returns non-nil on success."
+  (setq agent-shell-alert--mac-module-tried t)
   (when (and (eq system-type 'darwin)
              (display-graphic-p)
              module-file-suffix
              (not (fboundp 'agent-shell-alert-mac-notify)))
     (unless (file-exists-p (agent-shell-alert--module-path))
-      (agent-shell-alert--compile-mac-module))
+      (ignore-errors (agent-shell-alert--compile-mac-module)))
     (ignore-errors
       (module-load (agent-shell-alert--module-path)))
     (if (fboundp 'agent-shell-alert-mac-notify)
@@ -238,7 +245,8 @@ Returns non-nil on success."
                     (error-message-string err))))
       (message "agent-shell-alert: native module unavailable; \
 install Xcode command line tools (`xcode-select --install') \
-for macOS desktop notifications")))
+then run M-x eval (agent-shell-alert--try-load-mac-module) RET \
+to enable native macOS desktop notifications")))
   agent-shell-alert--mac-authorized)
 
 (defun agent-shell-alert-notify (title body)
@@ -252,13 +260,26 @@ osascript on macOS when the terminal is unknown or tmux
 passthrough is not enabled.
 
   (agent-shell-alert-notify \"agent-shell\" \"Turn complete\")"
+  ;; Lazy-load: if the module hasn't been tried yet and we now have a
+  ;; GUI frame (e.g. emacsclient connecting to a daemon), try loading.
+  (when (and (not agent-shell-alert--mac-module-tried)
+             (eq system-type 'darwin)
+             (display-graphic-p))
+    (agent-shell-alert--try-load-mac-module))
   (cond
    ((agent-shell-alert--mac-available-p)
-    (agent-shell-alert-mac-notify title body))
+    (condition-case nil
+        (agent-shell-alert-mac-notify title body)
+      (error
+       (setq agent-shell-alert--mac-authorized nil)
+       (agent-shell-alert-notify title body))))
    ((and (display-graphic-p)
          (eq system-type 'darwin)
          (fboundp 'agent-shell-alert-mac-applescript-notify))
-    (agent-shell-alert-mac-applescript-notify title body))
+    (condition-case nil
+        (agent-shell-alert-mac-applescript-notify title body)
+      (error
+       (agent-shell-alert--osascript-notify title body))))
    ((not (display-graphic-p))
     (if-let ((payload (agent-shell-alert--osc-payload title body))
              (wrapped (agent-shell-alert--tmux-passthrough payload)))

@@ -1,7 +1,28 @@
 /* agent-shell-alert-mac.m -- Emacs dynamic module for macOS native notifications.
  *
- * Uses UNUserNotificationCenter to post desktop notifications from
- * GUI Emacs, which has a bundle identifier (e.g. org.gnu.Emacs).
+ * Provides three notification functions:
+ *
+ * 1. agent-shell-alert-mac-notify -- UNUserNotificationCenter (preferred).
+ *    See: https://developer.apple.com/documentation/usernotifications/unusernotificationcenter
+ *    KNOWN ISSUE: This path currently fails with UNErrorDomain error 1
+ *    (UNErrorCodeNotificationsNotAllowed) on the Homebrew emacs-app cask
+ *    build.  An adhoc-signed Emacs built from source works fine.  Apple
+ *    docs say no entitlement is needed for local notifications, and the
+ *    hardened runtime has no notification-related restrictions, so the
+ *    root cause is unknown.  See x.notification-center-spiking.md for
+ *    the full investigation.  The Elisp layer detects this failure at
+ *    load time and falls back to the AppleScript path below.
+ *
+ * 2. agent-shell-alert-mac-applescript-notify -- NSAppleScript fallback.
+ *    Runs `display notification` from within Emacs's process so macOS
+ *    attributes the notification to Emacs (icon, click-to-activate).
+ *    This is the current working path for GUI Emacs on macOS.  It uses
+ *    the deprecated AppleScript notification bridge but works on current
+ *    macOS versions.
+ *
+ * 3. agent-shell-alert-mac-request-authorization -- requests notification
+ *    permission via UNUserNotificationCenter.  Called at load time; if it
+ *    fails, the Elisp layer switches to the AppleScript path.
  *
  * Build: cc -Wall -O2 -fPIC -shared -fobjc-arc \
  *          -I<emacs-include-dir> \
