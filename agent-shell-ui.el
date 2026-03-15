@@ -50,7 +50,7 @@ NAMESPACE-ID, BLOCK-ID, LABEL-LEFT, LABEL-RIGHT, and BODY are the keys."
         (cons :label-right (agent-shell-ui--string-or-nil label-right))
         (cons :body (agent-shell-ui--string-or-nil body))))
 
-(cl-defun agent-shell-ui-update-fragment (model &key append create-new on-post-process navigation expanded no-undo)
+(cl-defun agent-shell-ui-update-fragment (model &key append create-new on-post-process navigation expanded no-undo insert-before)
   "Update or add a fragment using MODEL.
 
 When APPEND is non-nil, append to body instead of replacing.
@@ -61,6 +61,9 @@ When NAVIGATION is `auto', block is navigatable if non-empty body.
 When NAVIGATION is `always', block is always TAB navigatable.
 When EXPANDED is non-nil, body will be expanded by default.
 When NO-UNDO is non-nil, disable undo recording for this operation.
+When INSERT-BEFORE is a buffer position, new blocks are inserted
+before that position instead of at the end of the buffer.  This
+keeps content above the shell prompt when user input is pending.
 
 For existing blocks, the current expansion state is preserved unless overridden."
   (save-mark-and-excursion
@@ -172,7 +175,9 @@ For existing blocks, the current expansion state is preserved unless overridden.
                   (setq padding-end (point)))))
 
           ;; Not found or create-new - insert new block
-          (goto-char (point-max))
+          (goto-char (if insert-before
+                         (min insert-before (point-max))
+                       (point-max)))
           (setq padding-start (point))
           (insert (agent-shell-ui--required-newlines 2))
           (setq block-start (point))
@@ -450,13 +455,15 @@ NAVIGATION controls navigability:
     (put-text-property block-start (or body-end label-right-end label-left-end) 'read-only t)
     (put-text-property block-start (or body-end label-right-end label-left-end) 'front-sticky '(read-only))))
 
-(cl-defun agent-shell-ui-update-text (&key namespace-id block-id text append create-new no-undo)
+(cl-defun agent-shell-ui-update-text (&key namespace-id block-id text append create-new no-undo insert-before)
   "Update or insert a plain text entry identified by NAMESPACE-ID and BLOCK-ID.
 
 TEXT is the string to insert or append.
 When APPEND is non-nil, append TEXT to existing entry.
 When CREATE-NEW is non-nil, always create a new entry.
-When NO-UNDO is non-nil, disable undo recording."
+When NO-UNDO is non-nil, disable undo recording.
+When INSERT-BEFORE is a buffer position, new entries are inserted
+before that position instead of at the end of the buffer."
   (save-mark-and-excursion
     (let* ((inhibit-read-only t)
            (buffer-undo-list (if no-undo t buffer-undo-list))
@@ -496,7 +503,9 @@ When NO-UNDO is non-nil, disable undo recording."
                                        (cons :end (point)))))))
          ;; New entry.
          (t
-          (goto-char (point-max))
+          (goto-char (if insert-before
+                         (min insert-before (point-max))
+                       (point-max)))
           (let ((padding-start (point)))
             (insert (agent-shell-ui--required-newlines 2))
             (let ((block-start (point)))

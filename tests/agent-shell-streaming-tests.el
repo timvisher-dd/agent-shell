@@ -410,6 +410,77 @@ must preserve both newlines."
       (let ((text (buffer-substring-no-properties (point-min) (point-max))))
         (should (string-match-p "Paragraph one\\.\n.*\n.*Paragraph two" text))))))
 
+;;; Insert-before tests (content above prompt)
+
+(ert-deftest agent-shell-ui-update-fragment-insert-before-test ()
+  "New fragment with :insert-before inserts above that position.
+Simulates a prompt at the end of the buffer; the new fragment
+must appear before the prompt text, not after it."
+  (with-temp-buffer
+    (let ((inhibit-read-only t))
+      ;; Simulate existing output followed by a prompt.
+      (insert "previous output\n\nClaude Code> ")
+      (let ((prompt-start (- (point) (length "Claude Code> "))))
+        ;; Insert a notice fragment before the prompt.
+        (let ((model (list (cons :namespace-id "1")
+                           (cons :block-id "notice")
+                           (cons :label-left "Notices")
+                           (cons :body "Something happened"))))
+          (agent-shell-ui-update-fragment model
+                                          :expanded t
+                                          :insert-before prompt-start))
+        ;; The prompt must still be at the end.
+        (should (string-suffix-p "Claude Code> "
+                                 (buffer-substring-no-properties (point-min) (point-max))))
+        ;; The notice body must appear before the prompt.
+        (let ((notice-pos (save-excursion
+                            (goto-char (point-min))
+                            (search-forward "Something happened" nil t)))
+              (prompt-pos (save-excursion
+                            (goto-char (point-min))
+                            (search-forward "Claude Code> " nil t))))
+          (should notice-pos)
+          (should prompt-pos)
+          (should (< notice-pos prompt-pos)))))))
+
+(ert-deftest agent-shell-ui-update-text-insert-before-test ()
+  "New text entry with :insert-before inserts above that position."
+  (with-temp-buffer
+    (let ((inhibit-read-only t))
+      (insert "previous output\n\nClaude Code> ")
+      (let ((prompt-start (- (point) (length "Claude Code> "))))
+        (agent-shell-ui-update-text
+         :namespace-id "1"
+         :block-id "user-msg"
+         :text "yes"
+         :insert-before prompt-start)
+        ;; Prompt must remain at the end.
+        (should (string-suffix-p "Claude Code> "
+                                 (buffer-substring-no-properties (point-min) (point-max))))
+        ;; User message must appear before the prompt.
+        (let ((msg-pos (save-excursion
+                         (goto-char (point-min))
+                         (search-forward "yes" nil t)))
+              (prompt-pos (save-excursion
+                            (goto-char (point-min))
+                            (search-forward "Claude Code> " nil t))))
+          (should msg-pos)
+          (should prompt-pos)
+          (should (< msg-pos prompt-pos)))))))
+
+(ert-deftest agent-shell-ui-update-fragment-insert-before-nil-test ()
+  "When :insert-before is nil, new fragment inserts at end (default)."
+  (with-temp-buffer
+    (let ((inhibit-read-only t))
+      (insert "previous output")
+      (let ((model (list (cons :namespace-id "1")
+                         (cons :block-id "msg")
+                         (cons :label-left "Agent")
+                         (cons :body "hello"))))
+        (agent-shell-ui-update-fragment model :expanded t :insert-before nil))
+      (should (string-suffix-p "hello\n\n"
+                               (buffer-substring-no-properties (point-min) (point-max)))))))
+
 ;;; Label status transition tests
 
 (ert-deftest agent-shell--tool-call-update-overrides-uses-correct-keyword-test ()
