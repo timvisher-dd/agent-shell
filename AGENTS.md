@@ -17,3 +17,16 @@ When contributing:
 ## Contributing
 
 This is an Emacs Lisp project. See [CONTRIBUTING.org](CONTRIBUTING.org) for style guidelines, code checks, and testing. Please adhere to these guidelines.
+
+## Development workflow
+
+When adding or changing features:
+
+1. **Run `bin/test`.** Set `acp_root` and `shell_maker_root` if the
+   deps aren't in sibling worktrees. This runs byte-compilation, ERT
+   tests, and checks that `README.org` was updated when code changed.
+2. **Keep the README features list current.** The "Features on top of
+   agent-shell" section in `README.org` must be updated whenever code
+   changes land. Both `bin/test` and CI enforce this — changes to `.el`
+   or `tests/` files without a corresponding `README.org` update will
+   fail.
